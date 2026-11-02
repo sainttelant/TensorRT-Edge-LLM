@@ -528,16 +528,14 @@ PY
 
 判断标准是**命令退出码、三个组件与 sidecar 完整性、接口检查和后续引擎验证**，不是只搜索日志中的某个单词。
 
-### 9.6 后续传输和 Orin 引擎构建（未执行）
+### 9.6 传输和 Orin engine 构建
 
-当前宿主是 x86_64 + RTX 5000 Ada（SM89），不是 Orin；本次导出还显式隐藏了 GPU。
-现有 [build/CMakeCache.txt](build/CMakeCache.txt) 中记录的 CUDA architecture 是 `75`，不能拿这个 build 目录当成已验证的 SM87 runtime。
-请先在目标板确认第 7.1 节的软件栈，并准备真正面向 Orin 的程序，以下假设其位置为 `build-orin/`。
+在 Orin 上将仓库和模型产物放到目标目录。需要传输完整 `onnx/`，不能遗漏 `.data`、embedding、tokenizer、processor 或 config；还要保留原始 checkpoint，供 runtime 加载权重。输入 JSON 和其中引用的真实多相机图片也需要放到 Orin。
 
 **传输内容：**
 
-1. 完整 `onnx/`，不能遗漏 `.data`、embedding、tokenizer、processor 或 config。
-2. 保留原始 checkpoint；当前 [action_inference.cpp](examples/multimodal/action_inference.cpp) 提供 `--checkpointDir` 用于 runtime 权重加载。为了不依赖隐式路径，下面显式传入。
+1. 完整 `onnx/` 目录。
+2. 原始 checkpoint；[action_inference.cpp](examples/multimodal/action_inference.cpp) 通过 `--checkpointDir` 加载 runtime 权重。
 3. 真实的多相机图像、历史轨迹和输入 JSON。
 
 示例：在 x86 主机设置目标后传输。以下用户名和地址必须替换为实际值：
@@ -553,83 +551,36 @@ scp -r /workspace/R1_10B "$TARGET:$REMOTE_ROOT/checkpoint"
 目标目录不存在时，第二条 `scp` 将 checkpoint 内容复制到该目录。重复传输前检查目标，避免意外嵌套成 `checkpoint/R1_10B/`。
 后续 `MODEL_DIR` 应直接包含 `config.json` 和 safetensors 分片。
 
-在 **Orin** 上，使用本机 TensorRT 和 SM87 构建程序生成 engine：
+在仓库根目录运行 [build_orin.bash](build_orin.bash)。脚本会检查 Orin、CUDA、TensorRT、ONNX 文件和必需子模块，配置 SM87，并依次编译程序、构建 LLM / visual / action engines。默认模型路径是 `tensorrt-edgellm-workspace/R1_10B`；如实际位置不同，通过环境变量覆盖：
 
 ```bash
-export REPO_DIR=/path/to/TensorRT-Edge-LLM
-export BUILD_DIR="$REPO_DIR/build-orin"
-export MODEL_ROOT=/home/user/tensorrt-edgellm-workspace/R1_10B
-export ONNX_DIR="$MODEL_ROOT/onnx"
-export ENGINE_DIR="$MODEL_ROOT/engines"
-export MODEL_DIR="$MODEL_ROOT/checkpoint"
-export TRT_PACKAGE_DIR=/usr
-export LD_LIBRARY_PATH="$TRT_PACKAGE_DIR/lib:/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}"
-
-# CPU 导出时设置的空值不能带到 GPU 构建/推理环境。
-unset CUDA_VISIBLE_DEVICES
-mkdir -p "$MODEL_ROOT/logs"
-set -o pipefail
-
-"$BUILD_DIR/examples/llm/llm_build" \
-  --onnxDir "$ONNX_DIR/llm" \
-  --engineDir "$ENGINE_DIR/llm" \
-  --maxInputLen 3424 \
-  --maxKVCacheCapacity 4096 \
-  --maxBatchSize 1 \
-  2>&1 | tee "$MODEL_ROOT/logs/build-llm.log"
-
-"$BUILD_DIR/examples/multimodal/visual_build" \
-  --onnxDir "$ONNX_DIR/visual" \
-  --engineDir "$ENGINE_DIR" \
-  --minImageTokens 160 \
-  --maxImageTokens 18432 \
-  --maxImageTokensPerImage 192 \
-  2>&1 | tee "$MODEL_ROOT/logs/build-visual.log"
-
-"$BUILD_DIR/examples/multimodal/action_build" \
-  --onnxDir "$ONNX_DIR/action" \
-  --engineDir "$ENGINE_DIR" \
-  --maxBatchSize 1 \
-  2>&1 | tee "$MODEL_ROOT/logs/build-action.log"
+cd /home/nvidia/disklarge/TensorRT-Edge-LLM
+./build_orin.bash --check-only
+./build_orin.bash
 ```
 
-逐条确认退出码为 0，再执行下一条；`pipefail` 防止 `tee` 掩盖失败。
-Visual 和 action builder 会自行追加 `visual/`、`action/`，因此传入根目录 `ENGINE_DIR`；LLM 则显式传入 `ENGINE_DIR/llm`。
-本次导出的 action KV 容量固定为 4096，LLM 构建必须保持一致。
+脚本默认使用 `MODEL_ROOT=$REPO_DIR/tensorrt-edgellm-workspace/R1_10B`、`TRT_PACKAGE_DIR=/usr`、系统 CUDA，并将构建日志写入 `$MODEL_ROOT/logs/`。可通过 `MODEL_ROOT`、`ONNX_DIR`、`ENGINE_DIR`、`MODEL_DIR`、`BUILD_DIR`、`TRT_PACKAGE_DIR`、`CUDA_DIR` 和 `BUILD_JOBS` 环境变量覆盖路径或并行度。builder 参数固定为本次导出的 batch=1 配置；LLM 的 KV cache 容量为 4096，与 action 配置一致。
 
-这三个构建命令来自当前组件接口，参数采用前文 batch=1 候选配置，**未在 Orin 实测**。不要将 Ada 上生成的 TensorRT engine 直接作为 Orin engine。
+本次已在 Orin 上完成三个 engine 的构建，产物位于 `$MODEL_ROOT/engines/`。不要将其他 GPU 架构上生成的 TensorRT engine 用于 Orin。
 
-### 9.7 完整 action inference（未执行，需要真实输入）
+### 9.7 完整 action inference（需要真实输入）
 
-按 [Alpamayo 示例](docs/source/user_guide/examples/vla/alpamayo.md) 准备输入 JSON，将所有图片路径替换为目标板上的真实文件，保留正确的相机/时间顺序和历史轨迹。
-首次验收不应使用空图片、随意伪造的轨迹或仅文本输入代替 VLA 请求。
+按 [Alpamayo 示例](docs/source/user_guide/examples/vla/alpamayo.md) 准备输入 JSON，将所有图片路径替换为 Orin 上的真实文件，并保留正确的相机/时间顺序和历史轨迹。首次验收不要使用空图片、随意伪造的轨迹或仅文本输入。
 
-沿用第 9.6 节的目标板环境变量：
+确认 checkpoint 目录直接包含 `config.json` 和 safetensors 分片、输入 JSON 存在后，在仓库根目录运行：
 
 ```bash
-export INPUT_FILE="$MODEL_ROOT/input_action.json"
-export OUTPUT_FILE="$MODEL_ROOT/output_action.json"
-test -s "$INPUT_FILE"
-test -s "$MODEL_DIR/config.json"
-
-"$BUILD_DIR/examples/multimodal/action_inference" \
-  --engineDir "$ENGINE_DIR/llm" \
-  --multimodalEngineDir "$ENGINE_DIR" \
-  --checkpointDir "$MODEL_DIR" \
-  --inputFile "$INPUT_FILE" \
-  --outputFile "$OUTPUT_FILE" \
-  --batchSize 1 \
-  --noiseSeed 5 \
-  --dumpProfile \
-  --profileOutputFile "$MODEL_ROOT/profile_action.json" \
-  2>&1 | tee "$MODEL_ROOT/logs/inference-action.log"
+cd /home/nvidia/disklarge/TensorRT-Edge-LLM
+INPUT_FILE=/path/to/input_action.json ./build_orin.bash --inference
 ```
 
-最低验收：
+`--inference` 会先重新构建 engines，再执行完整 action inference。输入、输出和 checkpoint 路径可用 `INPUT_FILE`、`OUTPUT_FILE`、`MODEL_DIR` 覆盖；默认输出为 `$MODEL_ROOT/output_action.json`，profile 和推理日志保存在 `$MODEL_ROOT/` 与 `$MODEL_ROOT/logs/`。
+
+最低验收要求：
 
 - 三个 engine 能在同一进程加载，完整 VLM → action 路径成功；
 - 输出包含文本及 64 个有限的 `(accel, kappa)` 对；
 - 与参照使用一致输入、初始噪声和后处理，另做数值比较；相同 seed 不保证跨 RNG 实现产生同样噪声；
 - 记录视觉、prefill、decode、action、总时延与内存，而不是只报告文本 tokens/s。
 
-**最终状态：本机完整导出和静态产物验证已通过；Orin build、runtime、动作数值对齐及性能均待目标板验证。** 本次没有修改模型源码，也没有把导出成功写成端到端部署成功。
+**最终状态：本机导出与静态产物验证、Orin 上三个 engine 的构建均已通过；完整 runtime inference、动作数值对齐及性能验证待提供真实输入后执行。** 本次没有修改模型源码，也没有把 engine 构建成功等同于端到端部署验证完成。
