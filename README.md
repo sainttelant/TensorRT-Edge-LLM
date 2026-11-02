@@ -1,154 +1,216 @@
-<div align="center">
-
-# TensorRT Edge-LLM
-
-**High-Performance Large Language Model Inference Framework for NVIDIA Edge Platforms**
-
-[![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg?style=flat)](https://nvidia.github.io/TensorRT-Edge-LLM/)
-[![version](https://img.shields.io/badge/release-0.11.0-green)](https://github.com/NVIDIA/TensorRT-Edge-LLM/blob/main/tensorrt_edgellm/_version.py)
-[![license](https://img.shields.io/badge/license-Apache%202-blue)](https://github.com/NVIDIA/TensorRT-Edge-LLM/blob/main/LICENSE)
-
-[Overview](https://nvidia.github.io/TensorRT-Edge-LLM/latest/overview.html)&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;[Support Matrix](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/support-matrix.html)&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;[Quick Start](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/quick-start-guide.html)&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;[Performance](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/performance/performance-benchmarks.html)&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;[Documentation](https://nvidia.github.io/TensorRT-Edge-LLM/)&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;[Roadmap](https://github.com/NVIDIA/TensorRT-Edge-LLM/issues?q=is%3Aissue%20state%3Aopen%20label%3ARoadmap)
-
 ---
-<div align="left">
-
-## Latest News
-
-- **[2026/09]** [TensorRT Edge-LLM completes the MLPerf Edge Agentic benchmark 6.4x faster on Jetson AGX Thor](https://developer.nvidia.com/blog/tensorrt-edge-llm-completes-the-mlperf-edge-agentic-benchmark-6-4x-faster-on-jetson-agx-thor/).
-- **[2026/09]** Release **0.11.0** adds [published Python wheels](docs/source/user_guide/getting_started/installation.md#published-python-wheel), [Muse-Glimmer](https://huggingface.co/meta-models/Muse-Glimmer-30B), experimental [pi0.5](docs/source/user_guide/examples/vla/pi05.md), Hunyuan dense models, [guided decoding](docs/source/user_guide/examples/experimental-server.md#structured-output), opt-in [in-flight batching](docs/source/user_guide/features/in-flight-batching.md), native provider Jinja chat templates, and GPU-free CuTe DSL artifact generation.
-- **[2026/09]** Release **0.10.1** adds experimental [**TP=2 inference on Dual NVIDIA DGX Spark**](docs/source/user_guide/features/multi-device.md) and redesigns the experimental [OpenAI-compatible server](docs/source/user_guide/examples/experimental-server.md) for faster cold launches and lower memory usage.
-- **[2026/08]** TensorRT Edge-LLM **0.10.0** adds Day-0 support for [**Qwen3.8-27B**](https://huggingface.co/Qwen/Qwen3.8-27B).
-- **[2026/08]** Release **0.10.0** adds support for [**NVIDIA Nemotron-3.5 Lightning**](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4) with **MTP** and **DFlash**, [**Cosmos3-Edge**](https://huggingface.co/nvidia/Cosmos3-Edge), [**DiffusionGemma**](https://huggingface.co/nvidia/diffusiongemma-26B-A4B-it-NVFP4), [**Nemotron-3.5-ASR**](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b), and [**DSpark**](docs/source/user_guide/examples/speculative-decoding.md#dspark) speculative decoding, alongside an experimental [direct TensorRT engine builder](docs/source/user_guide/getting_started/direct-engine-builder.md) without ONNX export, multi-turn KV-cache reuse, and video input for the experimental OpenAI-compatible server.
-- **[2026/07]** Support for the full **Gemma 4** family (E2B / E4B / 12B / 26B-A4B / 31B — multimodal text + image + audio, with MTP), **Qwen3-Omni** and **Nemotron-3** NVFP4, and **DFlash** speculative decoding (with DDTree for Qwen3 / Qwen3.5) landed across releases 0.9.0 and 0.9.1.
-
+datasets:
+- nvidia/PhysicalAI-Autonomous-Vehicles
+- nvidia/PhysicalAI-Autonomous-Vehicles-NuRec
+pipeline_tag: robotics
+library_name: transformers
+license: openmdw-1.1
+language:
+- en
+new_version: nvidia/Alpamayo-1.5-10B
+tags:
+- alpamayo
 ---
 
-## Overview
+# Alpamayo 1
 
-TensorRT Edge-LLM is NVIDIA's C++ inference runtime for text, vision, audio, speech, and action models on NVIDIA Jetson, NVIDIA DRIVE, and NVIDIA DGX Spark. The supported frontend exports Hugging Face checkpoints to [ONNX](https://onnx.ai) for C++ engine building; an experimental direct frontend builds engines from checkpoints without ONNX. Both paths use the same C++ deployment runtimes.
+[**Code**](https://github.com/NVlabs/alpamayo) | [**Paper**](https://arxiv.org/abs/2511.00088)
 
----
+_Note: Following the release of [NVIDIA Alpamayo](https://nvidianews.nvidia.com/news/alpamayo-autonomous-vehicle-development) at CES 2026, Alpamayo-R1 has been renamed to Alpamayo 1._
 
-## Getting Started
+## Model Overview
 
-Check the [**Official Support Matrix**](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/support-matrix.html), then follow the [**Quick Start Guide**](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/quick-start-guide.html). Checkpoint IDs are listed in [**Supported Models**](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/supported-models.html).
+### Description:
 
-For a supported target, install a [published Python wheel](docs/source/user_guide/getting_started/installation.md#published-python-wheel)
-without compiling Edge-LLM. Use `tensorrt-edgellm[server]` for the high-level
-Python API and HTTP serving; see the [extras guide](docs/source/user_guide/getting_started/installation.md#optional-python-dependencies)
-for export/tools dependencies and the minimal base workflow.
+Alpamayo 1 integrates Chain-of-Causation reasoning with trajectory planning to enhance decision-making in complex autonomous-driving scenarios. Alpamayo 1 (v1.0) was developed by NVIDIA as a vision-language-action (VLA) model that bridges interpretable reasoning with precise vehicle control for autonomous-driving applications.
 
-Install the base package from PyPI (requires a supported CUDA/TensorRT stack):
+This model is ready for non-commercial use. Commercial licensing available upon request.
 
-```bash
-pip install tensorrt-edgellm==0.11.0
-```
+### License:
 
----
+**Model weights:** The model weights are released under the [OpenMDW-1.1](https://openmdw.ai/license/1-1/) license.
 
-## Documentation
+**Source code:** Apache License 2.0, as provided in the Alpamayo 1 source repository.
 
-### Introduction
+### Deployment Geography:
 
-- **[Overview](https://nvidia.github.io/TensorRT-Edge-LLM/latest/overview.html)** - What is TensorRT Edge-LLM and key features
-- **[Official Support Matrix](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/support-matrix.html)** - Platform, JetPack, DriveOS, CUDA, TensorRT, and TensorRT Edge-LLM compatibility
-- **[Supported Models](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/supported-models.html)** - Complete model compatibility matrix
-- **[Checkpoint Exporter](https://nvidia.github.io/TensorRT-Edge-LLM/latest/developer_guide/software-design/checkpoint-export.html)** - Recommended ONNX export pipeline
-- **[Experimental Direct Engine Builder](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/direct-engine-builder.html)** - Build all model components directly from a checkpoint
+Global
 
-### User Guide
+### Use Case:
 
-- **[Installation](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/installation.html)** - Set up quantization, `tensorrt_edgellm`, and the C++ runtime
-- **[Quick Start Guide](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/quick-start-guide.html)** - Run your first inference in ~15 minutes
-- **[Examples](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/examples/index.html)** - End-to-end workflows
-- **[Quantization](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/features/quantization.html)** - Create quantized checkpoints for `tensorrt_edgellm`
-- **[Experimental High-Level Python API and Server](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/examples/experimental-server.html)** - vLLM-style API and OpenAI-compatible server
-- **[Input Format Guide](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/format/input-format.html)** - Request format and specifications
-- **[Chat Template Format](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/format/chat-template-format.html)** - Chat template configuration
+Researchers and autonomous-driving practitioners who are developing and evaluating VLA models for autonomous-driving scenarios, particularly for handling rare, long-tail events.
 
-### Developer Guide
+### Release Date:
 
-#### Software Design
+Hugging Face 12/03/2025 via this repository.
 
-- **[Quantization Package Design](https://nvidia.github.io/TensorRT-Edge-LLM/latest/developer_guide/software-design/quantization-design.html)** - Quantization package architecture
-- **[Engine Builder](https://nvidia.github.io/TensorRT-Edge-LLM/latest/developer_guide/software-design/engine-builder.html)** - Building TensorRT engines
-- **[C++ Runtime Overview](https://nvidia.github.io/TensorRT-Edge-LLM/latest/developer_guide/software-design/cpp-runtime-overview.html)** - Runtime system architecture
-  - [LLM Inference Runtime](https://nvidia.github.io/TensorRT-Edge-LLM/latest/developer_guide/software-design/llm-inference-runtime.html)
+### Inference Code:
 
-#### Advanced Topics
+GitHub: https://github.com/NVlabs/alpamayo
 
-- **[Customization Guide](https://nvidia.github.io/TensorRT-Edge-LLM/latest/developer_guide/customization/customization-guide.html)** - Customizing TensorRT Edge-LLM for your needs
-- **[TensorRT Plugins](https://nvidia.github.io/TensorRT-Edge-LLM/latest/developer_guide/customization/tensorrt-plugins.html)** - Custom plugin development
-- **[Tests](tests/)** - Comprehensive test suite for contributors
+## Reference:
 
----
+[Alpamayo-R1: Bridging Reasoning and Action Prediction for Generalizable Autonomous Driving in the Long Tail](https://arxiv.org/abs/2511.00088)
 
-## Performance
+## Model Architecture:
 
-See the [**Performance Benchmarks**](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/performance/performance-benchmarks.html) page for released benchmark results covering LLM and VLM prefill, generation throughput, memory usage, and EAGLE speculative decoding speedups.
+**Architecture Type:** Transformer
 
----
+**Network Architecture:** A VLA model based on Cosmos-Reason and featuring a diffusion-based trajectory decoder.
 
-## Use Cases
+**This model was developed based on:** Cosmos-Reason (VLM backbone) with a diffusion-based action decoder
 
-**🚗 Automotive**
-- In-vehicle AI assistants
-- Voice-controlled interfaces
-- Scene understanding
-- Driver assistance systems
+**Number of model parameters:**
 
-**🤖 Robotics**
-- Natural language interaction
-- Task planning and reasoning
-- Visual question answering
-- Human-robot collaboration
+- Backbone: 8.2B parameters
+- Action Expert: 2.3B parameters
 
-**🏭 Industrial IoT**
-- Equipment monitoring with NLP
-- Automated inspection
-- Predictive maintenance
-- Voice-controlled machinery
+## Input(s):
 
-**📱 Edge Devices**
-- On-device chatbots
-- Offline language processing
-- Privacy-preserving AI
-- Low-latency inference
+**Input Type(s):** Image/Video, Text, Egomotion History
 
----
+**Input Format(s):**
 
-## Featured Websites
+- Image: Red, Green, Blue (RGB)
+- Text: String
+- Egomotion History: Floating-point values `(x, y, z), R_rot`
 
-- [TensorRT Edge-LLM Jetson AI Lab tutorial](https://www.jetson-ai-lab.com/tutorials/tensorrt-edge-llm/)
-- [Maximizing Memory Efficiency to Run Bigger Models on NVIDIA Jetson](https://developer.nvidia.com/blog/maximizing-memory-efficiency-to-run-bigger-models-on-nvidia-jetson/)
-- [Build Next-Gen Physical AI with Edge-First LLMs for Autonomous Vehicles and Robotics](https://developer.nvidia.com/blog/build-next-gen-physical-ai-with-edge%E2%80%91first-llms-for-autonomous-vehicles-and-robotics/)
-- [Accelerate AI Inference for Edge and Robotics with NVIDIA Jetson T4000 and NVIDIA JetPack 7.1](https://developer.nvidia.com/blog/accelerate-ai-inference-for-edge-and-robotics-with-nvidia-jetson-t4000-and-nvidia-jetpack-7-1/)
-- [Accelerating LLM and VLM Inference for Automotive and Robotics with NVIDIA TensorRT Edge-LLM](https://developer.nvidia.com/blog/accelerating-llm-and-vlm-inference-for-automotive-and-robotics-with-nvidia-tensorrt-edge-llm/)
+**Input Parameters:**
 
-Follow our [GitHub repository](https://github.com/NVIDIA/TensorRT-Edge-LLM) for the latest updates, releases, and announcements.
+- Image: Two-dimensional (2D), multi-camera, multi-timestep
+- Text: One-dimensional (1D)
+- Egomotion History: Three-dimensional (3D) translation and nine-dimensional (9D, 3x3) rotation, multi-timestep
 
----
+**Other Properties Related to Input:**
+Multi-camera images (4 cameras: front-wide, front-tele, cross-left, cross-right) with 0.4 second history window at 10Hz (4 frames per camera), image resolution 1080x1920 pixels (processor will downsample them to 320x576 pixels). Text inputs include user commands. Images and egomotion history (16 waypoints at 10Hz) also require associated timestamps.
+Note that the model is primarily trained and only tested under this setting.
+
+## Output(s)
+
+**Output Type(s):** Text, Trajectory
+
+**Output Format(s):**
+
+- Text: String (Chain-of-Causation reasoning traces)
+- Trajectory: Floating-point values `(x, y, z), R_rot`
+
+**Output Parameters:**
+
+- Text: One-dimensional (1D)
+- Trajectory: Three-dimensional (3D) translation and nine-dimensional (9D, 3x3) rotation, multi-timestep
+
+**Other Properties Related to Output:**
+Outputs 6.4-second future trajectory (64 waypoints at 10Hz) with position `(x, y, z)` and rotation matrix `R_rot` in ego vehicle coordinate frame.
+Internally, the trajectory is represented as a sequence of dynamic actions (acceleration and curvature) following a unicycle model in bird's-eye-view (BEV) space.
+Text reasoning traces are variable in length, describing driving decisions and causal factors.
+
+Our AI models are designed and/or optimized to run on NVIDIA GPU-accelerated systems. By leveraging NVIDIA's hardware (e.g. GPU cores) and software frameworks (e.g., CUDA libraries), the model achieves faster training and inference times compared to CPU-only solutions.
+
+## Software Integration:
+
+**Runtime Engine(s):**
+
+- PyTorch (minimum version: 2.8)
+- Hugging Face Transformers (minimum version: 4.57.1)
+- DeepSpeed (minimum version: 0.17.4)
+
+**Supported Hardware Microarchitecture Compatibility:**
+
+- NVIDIA GPUs with sufficient memory to load a 10B parameter model (minimum 1 GPU with at least 24GB of VRAM)
+
+**Preferred/Supported Operating System(s):**
+
+- Linux (we have not tested on other operating systems)
+
+The integration of foundation and fine-tuned models into AI systems requires additional testing using use-case-specific data to ensure safe and effective deployment. Following the V-model methodology, iterative testing and validation at both unit and system levels are essential to mitigate risks, meet technical and functional requirements, and ensure compliance with safety and ethical standards before deployment.
+
+## Model Version(s):
+
+Alpamayo 1 10B v1.0 trained
+
+Can be integrated into autonomous driving software in the cloud for advanced end-to-end perception, reasoning, and motion planning.
+
+## Training, Testing, and Evaluation Datasets:
+
+## Training Dataset:
+
+Alpamayo 1's training data comprises a mix of Chain of Causation (CoC) reasoning traces, Cosmos-Reason Physical AI datasets, and NVIDIA's internal proprietary autonomous driving data.
+
+**Data Modality:**
+
+- Image (multi-camera)
+- Text (reasoning traces)
+- Other: Trajectory data (egomotion, future waypoints)
+
+**Image Training Data Size:** More than 1 Billion Images (from 80,000 hours of multi-camera driving data)
+
+**Text Training Data Size:** Less than a Billion Tokens (700K CoC reasoning traces plus Cosmos-Reason training data)
+
+**Video Training Data Size:** 10,000 to 1 Million Hours (80,000 hours)
+
+**Non-Audio, Image, Text Training Data Size:** Trajectory data: 80,000 hours at 10Hz sampling rate
+
+**Data Collection Method by dataset:** Hybrid: Automatic/Sensors (camera and vehicle sensors), Synthetic (VLM-generated reasoning)
+
+**Labeling Method by dataset:** Hybrid: Human (structured CoC annotations), Automated (VLM-based auto-labeling), Automatic/Sensors (trajectory and egomotion)
+
+**Properties:**
+The dataset comprises 80,000 hours of multi-camera driving videos with corresponding egomotion and trajectory annotations.
+It includes 700,000 Chain-of-Causation (CoC) reasoning traces that provide decision-grounded, causally linked explanations of driving behaviors.
+Content includes machine-generated data from vehicle sensors (cameras, IMUs, and GPS) and synthetic reasoning traces.
+CoC annotations are in English and use a structured format that links driving decisions to causal factors.
+Sensors include RGB cameras (2-6 per vehicle), inertial measurement units, and GPS.
+
+### Testing Dataset:
+
+**Link:** Proprietary autonomous driving test datasets, closed-loop simulation, on-vehicle road tests.
+
+**Data Collection Method by dataset:** Hybrid: Automatic/Sensors (real-world driving data), Synthetic (simulation scenarios)
+
+**Labeling Method by dataset:** Hybrid: Automatic/Sensors, Human (ground truth verification)
+
+**Properties:**
+This dataset covers multi-camera driving scenarios with a particular focus on rare, long-tail events. It includes challenging cases such as complex intersections, cut-ins, pedestrian interactions, and adverse weather conditions. Data are collected from RGB cameras and vehicle sensors.
+
+### Evaluation Dataset:
+
+**Link:** Same as Testing Dataset.
+
+**Data Collection Method by dataset:** Hybrid: Automatic/Sensors (real-world driving data), Synthetic (simulation scenarios)
+
+**Labeling Method by dataset:** Hybrid: Automatic/Sensors, Human (ground truth verification)
+
+**Properties:**
+Evaluation focuses on rare, long-tail scenarios, including complex intersections, pedestrian crossings, vehicle cut-ins, and challenging weather and lighting conditions. Multi-camera sensor data are collected from RGB cameras.
+
+**Quantitative Evaluation Benchmarks:**
+
+- Closed-Loop Evaluation using [AlpaSim](https://github.com/NVlabs/alpasim) on 910 scenarios from the [PhysicalAI-AV-NuRec Dataset](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles-NuRec): AlpaSim Score of 0.73 ± 0.01.
+- Open-Loop Evaluation on 937 challenging samples from the [PhysicalAI-AV Dataset](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles): minADE_6 at 6.4s of 1.22m.
+
+# Inference:
+
+**Acceleration Engine:** PyTorch, Hugging Face Transformers
+
+**Test Hardware:**
+
+- Minimum: 1 GPU with 24GB+ VRAM (e.g., NVIDIA RTX 3090, RTX 3090 Ti, RTX 4090, A5000, or equivalent)
+- Tested on: NVIDIA H100
+
+For scripts related to model inference, please check out our [code repository](https://github.com/NVlabs/alpamayo).
+
+## Ethical Considerations:
+
+NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal model team to ensure this model meets requirements for the relevant industry and use case and addresses unforeseen product misuse.
+
+Please report model quality, risk, security vulnerabilities or NVIDIA AI Concerns [here](https://app.intigriti.com/programs/nvidia/nvidiavdp/detail).
 
 ## Support
 
-- **Documentation**: [Full Documentation](https://nvidia.github.io/TensorRT-Edge-LLM/)
-- **Quick Start**: [Quick Start Guide](https://nvidia.github.io/TensorRT-Edge-LLM/latest/user_guide/getting_started/quick-start-guide.html)
-- **Roadmap**: [Developer Roadmap](https://github.com/NVIDIA/TensorRT-Edge-LLM/issues?q=is%3Aissue%20state%3Aopen%20label%3ARoadmap)
-- **Issues**: [GitHub Issues](https://github.com/NVIDIA/TensorRT-Edge-LLM/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/NVIDIA/TensorRT-Edge-LLM/discussions)
-- **Forums**: [NVIDIA Developer Forums](https://forums.developer.nvidia.com/)
+📣 **Usage questions**: post on the [Alpamayo NV Developer Forum](https://forums.developer.nvidia.com/c/autonomous-vehicles/alpamayo/766).
 
----
+🐛 **Code bugs / documentation issues / feature requests**: file a GitHub issue using the appropriate template (Bug report, Documentation request, or Feature request) at https://github.com/NVlabs/alpamayo/issues/new/choose . The relevant NVIDIA responder is auto-assigned.
 
-## License
+🚨 **Security vulnerabilities**: please use [NVIDIA's Vulnerability Disclosure Program](https://app.intigriti.com/programs/nvidia/nvidiavdp/detail). Do not file public issues.
 
-[Apache License 2.0](LICENSE)
-
----
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
-
----
+*(Note: the HuggingFace Community tab for this model will be disabled on 07/31/2026. Please use the channels above.)*
