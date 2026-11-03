@@ -530,12 +530,12 @@ PY
 
 ### 9.6 传输和 Orin engine 构建
 
-在 Orin 上将仓库和模型产物放到目标目录。需要传输完整 `onnx/`，不能遗漏 `.data`、embedding、tokenizer、processor 或 config；还要保留原始 checkpoint，供 runtime 加载权重。输入 JSON 和其中引用的真实多相机图片也需要放到 Orin。
+在 Orin 上将仓库和模型产物放到目标目录。需要传输完整 `onnx/`，不能遗漏 `.data`、embedding、tokenizer、processor 或 config。使用 checkpoint-backed 权重时还需要原始 checkpoint；本次 ONNX 构建的 engines 使用内嵌权重和 sidecar，不要求原始 checkpoint。输入 JSON 和其中引用的真实多相机图片也需要放到 Orin。
 
 **传输内容：**
 
 1. 完整 `onnx/` 目录。
-2. 原始 checkpoint；[action_inference.cpp](examples/multimodal/action_inference.cpp) 通过 `--checkpointDir` 加载 runtime 权重。
+2. 如果组件配置含非空 `checkpoint_weight_bindings`，传输原始 checkpoint；[action_inference.cpp](examples/multimodal/action_inference.cpp) 通过 `--checkpointDir` 加载这些权重。本次内嵌权重 engines 无需此步骤。
 3. 真实的多相机图像、历史轨迹和输入 JSON。
 
 示例：在 x86 主机设置目标后传输。以下用户名和地址必须替换为实际值：
@@ -567,7 +567,7 @@ cd /home/nvidia/disklarge/TensorRT-Edge-LLM
 
 按 [Alpamayo 示例](docs/source/user_guide/examples/vla/alpamayo.md) 准备输入 JSON，将所有图片路径替换为 Orin 上的真实文件，并保留正确的相机/时间顺序和历史轨迹。首次验收不要使用空图片、随意伪造的轨迹或仅文本输入。
 
-确认 checkpoint 目录直接包含 `config.json` 和 safetensors 分片、输入 JSON 存在后，在仓库根目录运行：
+确认输入 JSON 和图片存在后，在仓库根目录运行。本次内嵌权重 engines 不要求 checkpoint；只有使用 checkpoint-backed 权重时，才需要通过 `MODEL_DIR` 指定包含 `config.json` 和 safetensors 分片的原始 checkpoint 目录：
 
 ```bash
 cd /home/nvidia/disklarge/TensorRT-Edge-LLM
@@ -583,4 +583,6 @@ INPUT_FILE=/path/to/input_action.json ./build_orin.bash --inference
 - 与参照使用一致输入、初始噪声和后处理，另做数值比较；相同 seed 不保证跨 RNG 实现产生同样噪声；
 - 记录视觉、prefill、decode、action、总时延与内存，而不是只报告文本 tokens/s。
 
-**最终状态：本机导出与静态产物验证、Orin 上三个 engine 的构建均已通过；完整 runtime inference、动作数值对齐及性能验证待提供真实输入后执行。** 本次没有修改模型源码，也没有把 engine 构建成功等同于端到端部署验证完成。
+2026-11-02 已使用 [VLA_tests/input_action.json](VLA_tests/input_action.json) 在 Orin 上完成 3 个 clip 的离线冒烟推理，三个请求均成功输出非空文本及 64 个有限的 `(accel, kappa)` 对。结果位于 [output_action.json](tensorrt-edgellm-workspace/R1_10B/output_action.json)，profile 位于 [profile_action.json](tensorrt-edgellm-workspace/R1_10B/profile_action.json)。本次未提供原始 checkpoint；配置不含 `checkpoint_weight_bindings`，运行时直接使用内嵌权重和 sidecar。
+
+**最终状态：导出与静态产物验证、Orin engine 构建和离线流程冒烟推理已通过；动作准确性与真实性能验收尚未完成。** 测试轨迹沿用示例，未与视频对应，相机布局及传感器时间同步也未验证，不能用于动作准确性判断或车辆控制。

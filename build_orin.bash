@@ -41,8 +41,8 @@ TRT_PACKAGE_DIR, CUDA_DIR, or BUILD_JOBS to override the defaults.
 Options:
   --check-only  Check platform, tools, and ONNX inputs without building.
   --inference   Also run action inference after engine builds. Requires
-                MODEL_DIR/config.json and INPUT_FILE (defaults to
-                MODEL_ROOT/input_action.json).
+                INPUT_FILE (defaults to MODEL_ROOT/input_action.json).
+                MODEL_DIR is required only for checkpoint-backed weights.
   --help        Show this help.
 EOF
 }
@@ -103,8 +103,28 @@ if [[ ! -s "$CUTE_DSL_ARCHIVE" && ! -s "$CUTE_DSL_LIBRARY" ]]; then
 fi
 
 if ((RUN_INFERENCE)); then
-    [[ -s "${MODEL_DIR}/config.json" ]] || fail "Inference requires checkpoint config: ${MODEL_DIR}/config.json"
     [[ -s "$INPUT_FILE" ]] || fail "Inference input JSON not found: $INPUT_FILE"
+    python3 - "$ONNX_DIR" "$MODEL_DIR" <<'PY'
+import json
+import pathlib
+import sys
+
+onnx_dir = pathlib.Path(sys.argv[1])
+checkpoint_dir = pathlib.Path(sys.argv[2])
+for component in ("llm", "visual", "action"):
+    config_path = onnx_dir / component / "config.json"
+    with config_path.open() as stream:
+        config = json.load(stream)
+    bindings = config.get("checkpoint_weight_bindings", [])
+    if not isinstance(bindings, list):
+        sys.exit(f"ERROR: checkpoint_weight_bindings must be an array: {config_path}")
+    if bindings and not (checkpoint_dir / "config.json").is_file():
+        sys.exit(
+            f"ERROR: {component} requires checkpoint-backed weights. "
+            f"Set MODEL_DIR to the original checkpoint directory: {checkpoint_dir}"
+        )
+    print(f"{component}: {'checkpoint-backed' if bindings else 'embedded/sidecar'} weights")
+PY
 fi
 
 printf 'Platform: %s\nCUDA: %s (%s)\nTensorRT root: %s\n' \
