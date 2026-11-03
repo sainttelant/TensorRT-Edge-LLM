@@ -28,19 +28,23 @@ BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
 INPUT_FILE="${INPUT_FILE:-${MODEL_ROOT}/input_action.json}"
 OUTPUT_FILE="${OUTPUT_FILE:-${MODEL_ROOT}/output_action.json}"
 RUN_INFERENCE=0
+BUILD_ONLY=0
 CHECK_ONLY=0
 
 usage() {
     cat <<'EOF'
-Usage: build_orin.bash [--check-only] [--inference] [--help]
+Usage: build_orin.bash [--check-only] [--buildonly | --inference] [--help]
 
-Configure and compile the Orin SM87 builders, then build LLM, visual, and
-action TensorRT engines. Set MODEL_ROOT, ONNX_DIR, ENGINE_DIR, BUILD_DIR,
+Reuse existing engines and build only missing components.
+With --inference, run action inference after preparing missing artifacts.
+Set MODEL_ROOT, ONNX_DIR, ENGINE_DIR, BUILD_DIR,
 TRT_PACKAGE_DIR, CUDA_DIR, or BUILD_JOBS to override the defaults.
 
 Options:
-  --check-only  Check platform, tools, and ONNX inputs without building.
-  --inference   Also run action inference after engine builds. Requires
+  --check-only  Check prerequisites for the selected mode without running.
+  --buildonly   Prepare engines without inference (the default).
+                Reuse existing engines and build only missing components.
+  --inference   Reuse existing engines, build missing ones, then infer. Requires
                 INPUT_FILE (defaults to MODEL_ROOT/input_action.json).
                 MODEL_DIR is required only for checkpoint-backed weights.
   --help        Show this help.
@@ -60,6 +64,9 @@ while (($# > 0)); do
         --inference)
             RUN_INFERENCE=1
             ;;
+        --buildonly)
+            BUILD_ONLY=1
+            ;;
         --help|-h)
             usage
             exit 0
@@ -72,47 +79,78 @@ while (($# > 0)); do
     shift
 done
 
-[[ "$(uname -m)" == "aarch64" ]] || fail "This script must run on an Orin (aarch64) device."
-[[ -d "$CUDA_DIR" ]] || fail "CUDA toolkit directory not found: $CUDA_DIR"
-[[ -x "${CUDA_DIR}/bin/nvcc" ]] || fail "nvcc not found under CUDA_DIR: $CUDA_DIR"
-CUDA_CTK_VERSION="$("${CUDA_DIR}/bin/nvcc" --version | sed -nE 's/.*release ([0-9]+\.[0-9]+).*/\1/p')"
-[[ -n "$CUDA_CTK_VERSION" ]] || fail "Could not determine CUDA toolkit version from nvcc."
-command -v cmake >/dev/null 2>&1 || fail "cmake is required."
-command -v tee >/dev/null 2>&1 || fail "tee is required."
-[[ -f "${TRT_PACKAGE_DIR}/include/aarch64-linux-gnu/NvInfer.h" \
-    || -f "${TRT_PACKAGE_DIR}/include/NvInfer.h" ]] \
-    || fail "TensorRT headers not found under TRT_PACKAGE_DIR=$TRT_PACKAGE_DIR."
+((BUILD_ONLY && RUN_INFERENCE)) && fail "--buildonly and --inference cannot be used together."
 
+[[ "$(uname -m)" == "aarch64" ]] || fail "This script must run on an Orin (aarch64) device."
+command -v tee >/dev/null 2>&1 || fail "tee is required."
+
+MISSING_COMPONENTS=()
+BUILD_TARGETS=()
+if [[ ! -s "${BUILD_DIR}/libNvInfer_edgellm_plugin.so" ]]; then
+    BUILD_TARGETS+=(NvInfer_edgellm_plugin)
+fi
+if [[ ! -x "${BUILD_DIR}/examples/multimodal/action_inference" ]]; then
+    BUILD_TARGETS+=(action_inference)
+fi
 for component in llm visual action; do
+    if [[ -s "${ENGINE_DIR}/${component}/${component}.engine" \
+        && -s "${ENGINE_DIR}/${component}/config.json" ]]; then
+        printf 'Reusing existing %s engine.\n' "$component"
+        continue
+    fi
+    printf 'Missing %s engine/config; scheduling component build.\n' "$component"
+    MISSING_COMPONENTS+=("$component")
     component_dir="${ONNX_DIR}/${component}"
     [[ -s "${component_dir}/model.onnx" ]] || fail "Missing ONNX graph: ${component_dir}/model.onnx"
     [[ -s "${component_dir}/model.onnx.data" ]] || fail "Missing ONNX external weights: ${component_dir}/model.onnx.data"
     [[ -s "${component_dir}/config.json" ]] || fail "Missing component config: ${component_dir}/config.json"
+    if [[ "$component" == "llm" ]]; then
+        builder="${BUILD_DIR}/examples/llm/llm_build"
+    else
+        builder="${BUILD_DIR}/examples/multimodal/${component}_build"
+    fi
+    if [[ ! -x "$builder" ]]; then
+        BUILD_TARGETS+=("${component}_build")
+    fi
 done
 
-if [[ ! -f "${REPO_DIR}/3rdParty/nlohmannJson/include/nlohmann/json.hpp" \
-    || ! -f "${REPO_DIR}/3rdParty/xgrammar/CMakeLists.txt" \
-    || ! -f "${REPO_DIR}/3rdParty/xgrammar/3rdparty/dlpack/include/dlpack/dlpack.h" ]]; then
-    fail "Required git submodules are missing. Run: git submodule update --init --recursive"
-fi
+if ((${#BUILD_TARGETS[@]})); then
+    [[ -d "$CUDA_DIR" ]] || fail "CUDA toolkit directory not found: $CUDA_DIR"
+    [[ -x "${CUDA_DIR}/bin/nvcc" ]] || fail "nvcc not found under CUDA_DIR: $CUDA_DIR"
+    CUDA_CTK_VERSION="$("${CUDA_DIR}/bin/nvcc" --version | sed -nE 's/.*release ([0-9]+\.[0-9]+).*/\1/p')"
+    [[ -n "$CUDA_CTK_VERSION" ]] || fail "Could not determine CUDA toolkit version from nvcc."
+    command -v cmake >/dev/null 2>&1 || fail "cmake is required."
+    [[ -f "${TRT_PACKAGE_DIR}/include/aarch64-linux-gnu/NvInfer.h" \
+        || -f "${TRT_PACKAGE_DIR}/include/NvInfer.h" ]] \
+        || fail "TensorRT headers not found under TRT_PACKAGE_DIR=$TRT_PACKAGE_DIR."
 
-CUTE_DSL_ARCHIVE="${REPO_DIR}/kernelSrcs/cuteDSLPrebuilt/cutedsl_aarch64_sm_87_cuda${CUDA_CTK_VERSION%%.*}.tar.gz"
-CUTE_DSL_LIBRARY="${REPO_DIR}/cpp/kernels/cuteDSLArtifact/aarch64/sm_87/libcutedsl_aarch64.a"
-if [[ ! -s "$CUTE_DSL_ARCHIVE" && ! -s "$CUTE_DSL_LIBRARY" ]]; then
-    fail "Missing SM87 CuTe DSL artifact for CUDA ${CUDA_CTK_VERSION}. Generate it with kernelSrcs/build_cutedsl.py."
+    if [[ ! -f "${REPO_DIR}/3rdParty/nlohmannJson/include/nlohmann/json.hpp" \
+        || ! -f "${REPO_DIR}/3rdParty/xgrammar/CMakeLists.txt" \
+        || ! -f "${REPO_DIR}/3rdParty/xgrammar/3rdparty/dlpack/include/dlpack/dlpack.h" ]]; then
+        fail "Required git submodules are missing. Run: git submodule update --init --recursive"
+    fi
+
+    CUTE_DSL_ARCHIVE="${REPO_DIR}/kernelSrcs/cuteDSLPrebuilt/cutedsl_aarch64_sm_87_cuda${CUDA_CTK_VERSION%%.*}.tar.gz"
+    CUTE_DSL_LIBRARY="${REPO_DIR}/cpp/kernels/cuteDSLArtifact/aarch64/sm_87/libcutedsl_aarch64.a"
+    if [[ ! -s "$CUTE_DSL_ARCHIVE" && ! -s "$CUTE_DSL_LIBRARY" ]]; then
+        fail "Missing SM87 CuTe DSL artifact for CUDA ${CUDA_CTK_VERSION}. Generate it with kernelSrcs/build_cutedsl.py."
+    fi
 fi
 
 if ((RUN_INFERENCE)); then
     [[ -s "$INPUT_FILE" ]] || fail "Inference input JSON not found: $INPUT_FILE"
-    python3 - "$ONNX_DIR" "$MODEL_DIR" <<'PY'
+    python3 - "$ENGINE_DIR" "$ONNX_DIR" "$MODEL_DIR" "${MISSING_COMPONENTS[@]}" <<'PY'
 import json
 import pathlib
 import sys
 
-onnx_dir = pathlib.Path(sys.argv[1])
-checkpoint_dir = pathlib.Path(sys.argv[2])
+engine_dir = pathlib.Path(sys.argv[1])
+onnx_dir = pathlib.Path(sys.argv[2])
+checkpoint_dir = pathlib.Path(sys.argv[3])
+missing_components = sys.argv[4:]
 for component in ("llm", "visual", "action"):
-    config_path = onnx_dir / component / "config.json"
+    config_root = onnx_dir if component in missing_components else engine_dir
+    config_path = config_root / component / "config.json"
     with config_path.open() as stream:
         config = json.load(stream)
     bindings = config.get("checkpoint_weight_bindings", [])
@@ -127,11 +165,12 @@ for component in ("llm", "visual", "action"):
 PY
 fi
 
-printf 'Platform: %s\nCUDA: %s (%s)\nTensorRT root: %s\n' \
-    "$(uname -m)" "$CUDA_DIR" "$CUDA_CTK_VERSION" "$TRT_PACKAGE_DIR"
+printf 'Platform: %s\nTensorRT root: %s\n' "$(uname -m)" "$TRT_PACKAGE_DIR"
 printf 'Build directory: %s\nModel root: %s\nEngine directory: %s\n' \
     "$BUILD_DIR" "$MODEL_ROOT" "$ENGINE_DIR"
-printf 'CUDA architecture: SM87; build jobs: %s\n' "$BUILD_JOBS"
+if ((${#BUILD_TARGETS[@]})); then
+    printf 'CUDA: %s (%s); SM87; build jobs: %s\n' "$CUDA_DIR" "$CUDA_CTK_VERSION" "$BUILD_JOBS"
+fi
 
 if ((CHECK_ONLY)); then
     printf 'Preflight checks passed.\n'
@@ -141,52 +180,10 @@ fi
 export LD_LIBRARY_PATH="${TRT_PACKAGE_DIR}/lib:${TRT_PACKAGE_DIR}/lib64:/usr/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 unset CUDA_VISIBLE_DEVICES
 mkdir -p "${MODEL_ROOT}/logs"
-
-cmake -S "$REPO_DIR" -B "$BUILD_DIR" \
-    -DTRT_PACKAGE_DIR="$TRT_PACKAGE_DIR" \
-    -DCUDA_DIR="$CUDA_DIR" \
-    -DCUDA_CTK_VERSION="$CUDA_CTK_VERSION" \
-    -DEMBEDDED_TARGET=jetson-orin \
-    -DCMAKE_CUDA_COMPILER="${CUDA_DIR}/bin/nvcc" \
-    -DCMAKE_CUDA_ARCHITECTURES=87
-
-BUILD_TARGETS=(NvInfer_edgellm_plugin llm_build visual_build action_build)
-if ((RUN_INFERENCE)); then
-    BUILD_TARGETS+=(action_inference)
-fi
-
-cmake --build "$BUILD_DIR" \
-    --target "${BUILD_TARGETS[@]}" \
-    --parallel "$BUILD_JOBS"
-
 export EDGELLM_PLUGIN_PATH="${BUILD_DIR}/libNvInfer_edgellm_plugin.so"
 
-"${BUILD_DIR}/examples/llm/llm_build" \
-    --onnxDir "${ONNX_DIR}/llm" \
-    --engineDir "${ENGINE_DIR}/llm" \
-    --maxInputLen 3424 \
-    --maxKVCacheCapacity 4096 \
-    --maxBatchSize 1 \
-    2>&1 | tee "${MODEL_ROOT}/logs/build-llm.log"
-[[ -s "${ENGINE_DIR}/llm/llm.engine" ]] || fail "LLM builder did not produce llm.engine."
-
-"${BUILD_DIR}/examples/multimodal/visual_build" \
-    --onnxDir "${ONNX_DIR}/visual" \
-    --engineDir "$ENGINE_DIR" \
-    --minImageTokens 160 \
-    --maxImageTokens 18432 \
-    --maxImageTokensPerImage 192 \
-    2>&1 | tee "${MODEL_ROOT}/logs/build-visual.log"
-[[ -s "${ENGINE_DIR}/visual/visual.engine" ]] || fail "Visual builder did not produce visual.engine."
-
-"${BUILD_DIR}/examples/multimodal/action_build" \
-    --onnxDir "${ONNX_DIR}/action" \
-    --engineDir "$ENGINE_DIR" \
-    --maxBatchSize 1 \
-    2>&1 | tee "${MODEL_ROOT}/logs/build-action.log"
-[[ -s "${ENGINE_DIR}/action/action.engine" ]] || fail "Action builder did not produce action.engine."
-
-if ((RUN_INFERENCE)); then
+run_inference() {
+    printf 'Running inference using prepared engines.\n'
     "${BUILD_DIR}/examples/multimodal/action_inference" \
         --engineDir "${ENGINE_DIR}/llm" \
         --multimodalEngineDir "$ENGINE_DIR" \
@@ -199,6 +196,58 @@ if ((RUN_INFERENCE)); then
         --profileOutputFile "${MODEL_ROOT}/profile_action.json" \
         2>&1 | tee "${MODEL_ROOT}/logs/inference-action.log"
     [[ -s "$OUTPUT_FILE" ]] || fail "Inference completed without a non-empty output: $OUTPUT_FILE"
+    printf 'Orin inference completed successfully.\n'
+}
+
+if ((${#BUILD_TARGETS[@]})); then
+    printf 'Compiling missing program targets: %s\n' "${BUILD_TARGETS[*]}"
+    cmake -S "$REPO_DIR" -B "$BUILD_DIR" \
+        -DTRT_PACKAGE_DIR="$TRT_PACKAGE_DIR" \
+        -DCUDA_DIR="$CUDA_DIR" \
+        -DCUDA_CTK_VERSION="$CUDA_CTK_VERSION" \
+        -DEMBEDDED_TARGET=jetson-orin \
+        -DCMAKE_CUDA_COMPILER="${CUDA_DIR}/bin/nvcc" \
+        -DCMAKE_CUDA_ARCHITECTURES=87
+
+    cmake --build "$BUILD_DIR" \
+        --target "${BUILD_TARGETS[@]}" \
+        --parallel "$BUILD_JOBS"
 fi
 
-printf 'Orin engine build completed successfully.\n'
+for component in "${MISSING_COMPONENTS[@]}"; do
+    case "$component" in
+        llm)
+            "${BUILD_DIR}/examples/llm/llm_build" \
+                --onnxDir "${ONNX_DIR}/llm" \
+                --engineDir "${ENGINE_DIR}/llm" \
+                --maxInputLen 3424 \
+                --maxKVCacheCapacity 4096 \
+                --maxBatchSize 1 \
+                2>&1 | tee "${MODEL_ROOT}/logs/build-llm.log"
+            ;;
+        visual)
+            "${BUILD_DIR}/examples/multimodal/visual_build" \
+                --onnxDir "${ONNX_DIR}/visual" \
+                --engineDir "$ENGINE_DIR" \
+                --minImageTokens 160 \
+                --maxImageTokens 18432 \
+                --maxImageTokensPerImage 192 \
+                2>&1 | tee "${MODEL_ROOT}/logs/build-visual.log"
+            ;;
+        action)
+            "${BUILD_DIR}/examples/multimodal/action_build" \
+                --onnxDir "${ONNX_DIR}/action" \
+                --engineDir "$ENGINE_DIR" \
+                --maxBatchSize 1 \
+                2>&1 | tee "${MODEL_ROOT}/logs/build-action.log"
+            ;;
+    esac
+    [[ -s "${ENGINE_DIR}/${component}/${component}.engine" ]] || fail "Builder did not produce ${component} engine."
+    [[ -s "${ENGINE_DIR}/${component}/config.json" ]] || fail "Builder did not produce ${component} config.json."
+done
+
+if ((RUN_INFERENCE)); then
+    run_inference
+else
+    printf 'Orin engines are ready (existing components reused).\n'
+fi

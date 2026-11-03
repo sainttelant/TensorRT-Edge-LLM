@@ -551,13 +551,15 @@ scp -r /workspace/R1_10B "$TARGET:$REMOTE_ROOT/checkpoint"
 目标目录不存在时，第二条 `scp` 将 checkpoint 内容复制到该目录。重复传输前检查目标，避免意外嵌套成 `checkpoint/R1_10B/`。
 后续 `MODEL_DIR` 应直接包含 `config.json` 和 safetensors 分片。
 
-在仓库根目录运行 [build_orin.bash](build_orin.bash)。脚本会检查 Orin、CUDA、TensorRT、ONNX 文件和必需子模块，配置 SM87，并依次编译程序、构建 LLM / visual / action engines。默认模型路径是 `tensorrt-edgellm-workspace/R1_10B`；如实际位置不同，通过环境变量覆盖：
+在仓库根目录运行 [build_orin.bash](build_orin.bash)。脚本逐组件复用已有的非空 engine 和配置，只为缺失组件检查 ONNX 并构建；仅在程序或插件缺失时检查编译环境并运行 CMake，配置 SM87。默认模型路径是 `tensorrt-edgellm-workspace/R1_10B`；如实际位置不同，通过环境变量覆盖：
 
 ```bash
 cd /home/nvidia/disklarge/TensorRT-Edge-LLM
 ./build_orin.bash --check-only
-./build_orin.bash
+./build_orin.bash --buildonly
 ```
+
+`--buildonly` 只准备 engines，不执行推理，也不要求输入 JSON 或 checkpoint；已有组件直接复用，缺失组件才构建。不带模式选项时行为相同。它与 `--inference` 互斥，可与 `--check-only` 组合仅检查前置条件。
 
 脚本默认使用 `MODEL_ROOT=$REPO_DIR/tensorrt-edgellm-workspace/R1_10B`、`TRT_PACKAGE_DIR=/usr`、系统 CUDA，并将构建日志写入 `$MODEL_ROOT/logs/`。可通过 `MODEL_ROOT`、`ONNX_DIR`、`ENGINE_DIR`、`MODEL_DIR`、`BUILD_DIR`、`TRT_PACKAGE_DIR`、`CUDA_DIR` 和 `BUILD_JOBS` 环境变量覆盖路径或并行度。builder 参数固定为本次导出的 batch=1 配置；LLM 的 KV cache 容量为 4096，与 action 配置一致。
 
@@ -565,16 +567,54 @@ cd /home/nvidia/disklarge/TensorRT-Edge-LLM
 
 ### 9.7 完整 action inference（需要真实输入）
 
+使用 [tools/extract_vla_frames.py](tools/extract_vla_frames.py) 从本地视频生成测试图片，需要 Python OpenCV（`cv2`）。默认选择 3 个 clip，每个 clip 8 个窗口，共 24 个请求、384 张 PNG；保留输入模板的文本、16 点示例轨迹和采样设置，更新合并输入及每个 clip、每个窗口的独立输入与帧映射：
+
+```bash
+python3 tools/extract_vla_frames.py --overwrite
+```
+
+指定某个 clip 时用 `--uuid`（与 `--clips` 互斥），会读取该 UUID 对应的四路相机，而不是单个 MP4。无需复制模板：默认自动创建 `VLA_tests/selected/<UUID>/input_action.json` 及同目录的 `window_mapping.json`，PNG 和各窗口 JSON 仍在 `VLA_tests/frames/` 对应的 clip 子目录：
+
+```bash
+python3 tools/extract_vla_frames.py \
+  --uuid 01d3588e-bca7-4a18-8e74-c6cfe9e996db \
+  --windows 8 --overwrite
+INPUT_FILE="$PWD/VLA_tests/selected/01d3588e-bca7-4a18-8e74-c6cfe9e996db/input_action.json" ./build_orin.bash --inference
+```
+
+可从 `datasets/samples.json` 的 `uuid` 字段选择 clip。UUID 不存在或缺少任一路相机文件时会报错，不会换用其他 clip。可用 `--input-file` 自定义输出位置：文件不存在时自动创建父目录并使用内置示例文本和 16 点轨迹（会打印警告，轨迹并非从视频测得）；文件存在时保留其中的文本、轨迹及采样参数，需包含 1 个请求或与本次窗口数相同的请求。不指定 UUID 时仍默认输出 `VLA_tests/input_action.json`，文件缺失时同样自动生成。
+
+窗口起点为 2、4、6、8、10、12、14、16 秒，每窗口 4 个时间点，间隔 0.5 秒，覆盖至 17.5 秒。可用 `--windows`、`--start`、`--window-stride`、`--frame-interval` 调整。图片按**时间优先**排列：每连续 4 张依次为前广角、前长焦、左交叉、右交叉相机。每窗口单独一个请求，`batch_size=1`；16 张图片加轨迹和文本不超过每条消息 18 项的限制。
+
+图片位于 [VLA_tests/frames/](VLA_tests/frames/) 各 clip 的 `window_00`–`window_07` 子目录，合并输入为 [VLA_tests/input_action.json](VLA_tests/input_action.json)，请求与帧对应关系为 [window_mapping.json](VLA_tests/window_mapping.json)。每个窗口携带完整的 16 点模板轨迹，不将点数与图片数量绑定，也不把模板扩展伪装成真实车辆运动；仅供离线冒烟测试。先前 clip 根目录的图片不再被新输入引用。
+
 按 [Alpamayo 示例](docs/source/user_guide/examples/vla/alpamayo.md) 准备输入 JSON，将所有图片路径替换为 Orin 上的真实文件，并保留正确的相机/时间顺序和历史轨迹。首次验收不要使用空图片、随意伪造的轨迹或仅文本输入。
 
 确认输入 JSON 和图片存在后，在仓库根目录运行。本次内嵌权重 engines 不要求 checkpoint；只有使用 checkpoint-backed 权重时，才需要通过 `MODEL_DIR` 指定包含 `config.json` 和 safetensors 分片的原始 checkpoint 目录：
 
 ```bash
 cd /home/nvidia/disklarge/TensorRT-Edge-LLM
-INPUT_FILE=/path/to/input_action.json ./build_orin.bash --inference
+INPUT_FILE="$PWD/VLA_tests/input_action.json" \
+OUTPUT_FILE="$PWD/VLA_tests/output_action_windows.json" \
+./build_orin.bash --inference
 ```
 
-`--inference` 会先重新构建 engines，再执行完整 action inference。输入、输出和 checkpoint 路径可用 `INPUT_FILE`、`OUTPUT_FILE`、`MODEL_DIR` 覆盖；默认输出为 `$MODEL_ROOT/output_action.json`，profile 和推理日志保存在 `$MODEL_ROOT/` 与 `$MODEL_ROOT/logs/`。
+`--inference` **有现成 engine 就复用，缺哪个组件才构建哪个，然后执行推理**。
+
+非空 engine 和对应 `config.json` 同时存在时视为已有产物；仅缺程序或插件时补编译，不重建已有 engines。产物齐全时不运行 CMake，也不依赖 ONNX 或 CUDA 编译器；更换图片或输入 JSON 不触发重建。复用检查不验证 engine 与当前模型、参数、TensorRT/GPU 环境的兼容性；这些发生变化时应指定新的 `ENGINE_DIR`（源码变化还需先重新编译程序），避免复用旧产物。加载失败时会直接报错，不偷偷覆盖已有 engine。`--inference --check-only` 只检查并打印复用/待构建计划。输入、输出和 checkpoint 路径可用 `INPUT_FILE`、`OUTPUT_FILE`、`MODEL_DIR` 覆盖；默认输出为 `$MODEL_ROOT/output_action.json`，profile 和推理日志保存在 `$MODEL_ROOT/` 与 `$MODEL_ROOT/logs/`。
+
+推理后使用 [tools/visualize_vla_output.py](tools/visualize_vla_output.py) 生成包含 16 张相机帧、64 步加速度/曲率曲线和 CoC/model output 文本的 PNG，需要 Matplotlib。默认读取 `--output-file` 同目录的 `window_mapping.json`，保存到该目录下的 `visualizations/`；可用 `--mapping-file` 和 `--output-dir` 显式覆盖。脚本会检查响应数量及图片路径是否与窗口映射一致，拒绝用旧结果绘制新窗口：
+
+```bash
+python3 tools/visualize_vla_output.py \
+  --output-file VLA_tests/output_action_windows.json
+
+# 单 UUID 推理结果：自动使用该 UUID 目录内的映射
+python3 tools/visualize_vla_output.py \
+  --output-file VLA_tests/selected/26f8dc7e-a9a2-4302-b847-af2009abf677/output_action.json
+```
+
+上例要求推理时设置 `OUTPUT_FILE="$PWD/VLA_tests/output_action_windows.json"`。图片和索引保存于 [VLA_tests/visualizations/](VLA_tests/visualizations/)。输出 `(accel, kappa)` 并非 XY 坐标；缺少初速度、时间步长与车辆模型时只画原始动作曲线，不绘制或叠加虚构的实际行驶路径。CoC 是模型原始输出文本，不代表经过验证的驾驶解释。
 
 最低验收要求：
 
@@ -583,6 +623,8 @@ INPUT_FILE=/path/to/input_action.json ./build_orin.bash --inference
 - 与参照使用一致输入、初始噪声和后处理，另做数值比较；相同 seed 不保证跨 RNG 实现产生同样噪声；
 - 记录视觉、prefill、decode、action、总时延与内存，而不是只报告文本 tokens/s。
 
-2026-11-02 已使用 [VLA_tests/input_action.json](VLA_tests/input_action.json) 在 Orin 上完成 3 个 clip 的离线冒烟推理，三个请求均成功输出非空文本及 64 个有限的 `(accel, kappa)` 对。结果位于 [output_action.json](tensorrt-edgellm-workspace/R1_10B/output_action.json)，profile 位于 [profile_action.json](tensorrt-edgellm-workspace/R1_10B/profile_action.json)。本次未提供原始 checkpoint；配置不含 `checkpoint_weight_bindings`，运行时直接使用内嵌权重和 sidecar。
+2026-11-02 已在 Orin 上完成 3 个 clip 的离线冒烟推理，三个请求均成功输出非空文本及 64 个有限的 `(accel, kappa)` 对。历史结果位于 [output_action.json](tensorrt-edgellm-workspace/R1_10B/output_action.json)，profile 位于 [profile_action.json](tensorrt-edgellm-workspace/R1_10B/profile_action.json)。该次输入为旧的相机优先顺序；2026-11-03 已改为时间优先抽帧，历史结果不能作为修正后输入的验证。本次未提供原始 checkpoint；配置不含 `checkpoint_weight_bindings`，运行时直接使用内嵌权重和 sidecar。
+
+2026-11-03 已复用现有 Orin engines 完成扩展后 24 个窗口的推理：24/24 请求输出非空文本和 64 个有限动作对。新结果为 [output_action_windows.json](VLA_tests/output_action_windows.json)，profile 为 [profile_action_windows.json](VLA_tests/profile_action_windows.json)，24 张带 CoC 文本的 PNG 位于 [visualizations/](VLA_tests/visualizations/)。已检查所有 384 张输入 PNG、请求顺序及全部可视化 PNG 的完整性。
 
 **最终状态：导出与静态产物验证、Orin engine 构建和离线流程冒烟推理已通过；动作准确性与真实性能验收尚未完成。** 测试轨迹沿用示例，未与视频对应，相机布局及传感器时间同步也未验证，不能用于动作准确性判断或车辆控制。
