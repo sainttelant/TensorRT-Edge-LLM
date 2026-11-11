@@ -148,6 +148,12 @@ def main(argv=None, *, prog="tensorrt-edgellm-quantize"):
     llm_parser = sub.add_parser("llm", help="Quantize an LLM")
     llm_parser.add_argument("--model-dir", "--model_dir", required=True)
     llm_parser.add_argument(
+        "--experimental-alpamayo-int8",
+        action="store_true",
+        help=(
+            "Experimental Alpamayo-R1 text-only INT8 SmoothQuant calibration; "
+            "visual/action/LM head/KV cache stay FP16. Not Orin-qualified."))
+    llm_parser.add_argument(
         "--fuse-gdn-qkvzba-scales",
         "--fuse_gdn_qkvzba_scales",
         action="store_true",
@@ -186,6 +192,24 @@ def main(argv=None, *, prog="tensorrt-edgellm-quantize"):
     args = parser.parse_args(argv)
 
     if args.command == "llm":
+        if args.experimental_alpamayo_int8:
+            if (args.quantization != "int8_sq" or any(
+                (args.lm_head_quantization, args.visual_quantization,
+                 args.visual_mha_quantization, args.audio_quantization,
+                 args.cp_quantization, args.kv_cache_quantization,
+                 args.mtp_draft_dir, args.fuse_gdn_qkvzba_scales,
+                 args.quantize_gemma4_down_proj))):
+                parser.error(
+                    "--experimental-alpamayo-int8 requires "
+                    "--quantization int8_sq without other quantization "
+                    "or draft overrides.")
+            from ..quantization.alpamayo import quantize_alpamayo_int8
+            quantize_alpamayo_int8(args.model_dir,
+                                   args.output_dir,
+                                   device=args.device,
+                                   text_dataset=args.text_dataset,
+                                   num_samples=args.num_samples)
+            return
         from ..quantization.quantize import quantize_and_export
         quantize_and_export(
             model_dir=args.model_dir,

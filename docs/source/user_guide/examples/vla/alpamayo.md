@@ -47,6 +47,12 @@ This creates `onnx/llm`, `onnx/visual`, and `onnx/action`.
 
 > **Note:** Only FP16 is supported for Alpamayo export. The `--max-kv-cache-capacity` value must match the `--max-kv-cache-capacity` used when building the LLM engine in Step 3.
 
+An opt-in, experimental text-calibrated INT8 SmoothQuant language-backbone
+workflow is documented in
+[the R1_10B quantization walkthrough](../../../../../README_quantize_R1_10B.md).
+It keeps the visual encoder, action expert, LM head, and KV cache unquantized.
+It is not a qualified Alpamayo or Orin deployment path.
+
 ## Step 2: Transfer to Device
 
 ```bash

@@ -5,7 +5,7 @@
 docker run --gpus all -it \
     -v /home/wilsxue.adm/AILLM/wilsonLLM/TensorRT-Edge-LLM:/workspace \
     -w /workspace \
-    --name wilson_pytorch_alpa nvcr.io/nvidia/pytorch:25.12-py3 \
+    --name wilson_llm_alpaway wilson_llm_edge:latest \
     bash    
 
 # build application in X86 docker container
