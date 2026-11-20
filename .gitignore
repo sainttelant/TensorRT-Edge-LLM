@@ -12,7 +12,6 @@ dist/
 *.engine
 *_onnx/
 __pycache__/
-.vscode
 .nvcode/
 .cache
 data/

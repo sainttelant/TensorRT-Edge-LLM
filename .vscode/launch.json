@@ -1,0 +1,53 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Alpamayo: action inference (C++ debug)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-orin-debug/examples/multimodal/action_inference",
+            "args": [
+                "--engineDir",
+                "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/engines/llm",
+                "--multimodalEngineDir",
+                "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/engines",
+                "--checkpointDir",
+                "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/checkpoint",
+                "--inputFile",
+                "${workspaceFolder}/VLA_tests/selected/26f8dc7e-a9a2-4302-b847-af2009abf677/input_action.json",
+                "--outputFile",
+                "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/output_action.json",
+                "--batchSize",
+                "1",
+                "--noiseSeed",
+                "5",
+                "--dumpProfile",
+                "--profileOutputFile",
+                "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/profile_action.json"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                {
+                    "name": "LD_LIBRARY_PATH",
+                    "value": "/usr/lib:/usr/lib64:/usr/lib/aarch64-linux-gnu:${env:LD_LIBRARY_PATH}"
+                },
+                {
+                    "name": "EDGELLM_PLUGIN_PATH",
+                    "value": "${workspaceFolder}/build-orin-debug/libNvInfer_edgellm_plugin.so"
+                }
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "preLaunchTask": "Build action_inference (Debug)",
+            "setupCommands": [
+                {
+                    "description": "Enable GDB pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}

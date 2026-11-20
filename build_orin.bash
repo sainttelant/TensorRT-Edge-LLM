@@ -30,20 +30,26 @@ OUTPUT_FILE="${OUTPUT_FILE:-${MODEL_ROOT}/output_action.json}"
 RUN_INFERENCE=0
 BUILD_ONLY=0
 CHECK_ONLY=0
+QUANTIZED_BUILD=0
 
 usage() {
     cat <<'EOF'
-Usage: build_orin.bash [--check-only] [--buildonly | --inference] [--help]
+Usage: build_orin.bash [--check-only] [--buildonly | --inference] [--quantinize] [--help]
 
 Reuse existing engines and build only missing components.
 With --inference, run action inference after preparing missing artifacts.
 Set MODEL_ROOT, ONNX_DIR, ENGINE_DIR, BUILD_DIR,
 TRT_PACKAGE_DIR, CUDA_DIR, or BUILD_JOBS to override the defaults.
+ONNX_DIR defaults to MODEL_ROOT/quantizedonnx. INT8 quantization is encoded
+in the LLM ONNX graph; no separate --int8 builder option is needed.
 
 Options:
   --check-only  Check prerequisites for the selected mode without running.
   --buildonly   Prepare engines without inference (the default).
                 Reuse existing engines and build only missing components.
+  --quantinize  Rebuild the LLM engine from the quantized ONNX graph, even if an
+                engine already exists. The correctly spelled --quantize alias
+                is also accepted. Existing visual/action engines are reused.
   --inference   Reuse existing engines, build missing ones, then infer. Requires
                 INPUT_FILE (defaults to MODEL_ROOT/input_action.json).
                 MODEL_DIR is required only for checkpoint-backed weights.
@@ -66,6 +72,9 @@ while (($# > 0)); do
             ;;
         --buildonly)
             BUILD_ONLY=1
+            ;;
+        --quantinize|--quantize)
+            QUANTIZED_BUILD=1
             ;;
         --help|-h)
             usage
@@ -95,10 +104,16 @@ fi
 for component in llm visual action; do
     if [[ -s "${ENGINE_DIR}/${component}/${component}.engine" \
         && -s "${ENGINE_DIR}/${component}/config.json" ]]; then
-        printf 'Reusing existing %s engine.\n' "$component"
-        continue
+        if [[ "$component" != "llm" || "$QUANTIZED_BUILD" == 0 ]]; then
+            printf 'Reusing existing %s engine.\n' "$component"
+            continue
+        fi
     fi
-    printf 'Missing %s engine/config; scheduling component build.\n' "$component"
+    if [[ "$component" == "llm" && "$QUANTIZED_BUILD" == 1 ]]; then
+        printf 'Quantized build requested; scheduling LLM engine rebuild.\n'
+    else
+        printf 'Missing %s engine/config; scheduling component build.\n' "$component"
+    fi
     MISSING_COMPONENTS+=("$component")
     component_dir="${ONNX_DIR}/${component}"
     [[ -s "${component_dir}/model.onnx" ]] || fail "Missing ONNX graph: ${component_dir}/model.onnx"
@@ -166,8 +181,8 @@ PY
 fi
 
 printf 'Platform: %s\nTensorRT root: %s\n' "$(uname -m)" "$TRT_PACKAGE_DIR"
-printf 'Build directory: %s\nModel root: %s\nEngine directory: %s\n' \
-    "$BUILD_DIR" "$MODEL_ROOT" "$ENGINE_DIR"
+printf 'Build directory: %s\nModel root: %s\nONNX input directory: %s\nEngine directory: %s\n' \
+    "$BUILD_DIR" "$MODEL_ROOT" "$ONNX_DIR" "$ENGINE_DIR"
 if ((${#BUILD_TARGETS[@]})); then
     printf 'CUDA: %s (%s); SM87; build jobs: %s\n' "$CUDA_DIR" "$CUDA_CTK_VERSION" "$BUILD_JOBS"
 fi

@@ -134,6 +134,11 @@ endfunction()
 # Convenience target: `ninja unitTests` builds every group.
 add_custom_target(unitTests)
 
+if(TARGET alpaway_sensor_tests)
+  add_test(NAME alpaway_sensor_tests COMMAND $<TARGET_FILE:alpaway_sensor_tests>)
+  add_dependencies(unitTests alpaway_sensor_tests)
+endif()
+
 edgellm_add_unit_test(
   NAME
   unitTestCommon

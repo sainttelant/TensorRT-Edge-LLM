@@ -186,3 +186,228 @@ cd /path/to/TensorRT-Edge-LLM
 ```
 
 Check `output_action.json` for the response. Each entry includes `output_text` (VLM language output) and `output_trajectory` (predicted (accel, kappa) acceleration and curvature pairs).
+
+## Live camera example (experimental)
+
+`alpaway_real` runs the same VLM and action engines with four camera streams.
+This is an experimental inference example, **not a vehicle controller or a
+safety-validated driving system**. Do not send its output to actuators.
+
+```bash
+export TRT_PACKAGE_DIR=/usr
+cmake -S . -B build-orin -DTRT_PACKAGE_DIR="$TRT_PACKAGE_DIR" -DBUILD_ALPAWAY_REAL=ON
+cmake --build build-orin --target alpaway_real -j2
+export LD_LIBRARY_PATH="$TRT_PACKAGE_DIR/lib:/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
+export EDGELLM_PLUGIN_PATH="$PWD/build-orin/libNvInfer_edgellm_plugin.so"
+./build-orin/examples/llm/alpaway_real \
+  --camera-config examples/configs/camera_video_smoke.json \
+  --trajectory-file /path/to/trajectory.json \
+  --engine-dir "$WORKSPACE_DIR/$MODEL_NAME/engines/llm" \
+  --multimodal-engine-dir "$WORKSPACE_DIR/$MODEL_NAME/engines" \
+  --max-windows 1
+```
+
+The optional OpenCV dependency requires its core, imgproc, videoio and highgui
+development components. `camera_video_smoke.json` references the local sample
+dataset, which is not distributed with the repository; replace the paths with
+four matching videos. File paths are relative to the process working directory.
+For camera streams, pass a different config with `--camera-config` and restart
+the program. There is no automatic failover or live source switching.
+
+For the local `R1_10B` workspace and clip
+`5e9a00f1-f575-43c8-a4e2-62e52a651dbb`, run from the repository root:
+
+```bash
+./run_alpaway_smoke.bash
+# On a device with a working graphical display:
+./run_alpaway_smoke.bash --show
+# Schematic path with EXPLICIT visualization assumptions, not measured speed:
+./run_alpaway_smoke.bash --show --preview-speed-mps 2.0 --preview-dt 0.1
+```
+
+This wrapper starts and monitors the example trajectory producer, waits for
+its first update, runs the FP16 video example, then cleans up the producer and
+its private temporary files. No second terminal is needed. It only permits
+file-based camera sources and explicitly replays synthetic example history,
+not measured motion. Use `--max-windows N` to change the default single window.
+`--help` lists environment overrides for video config, history template and
+engine/build directories. Relative paths are resolved from the repository
+root. The local dataset, template and engines must already exist; the wrapper
+does not export models or build engines.
+
+The `--show` dashboard places the matched front-wide input on the left and
+large, wrapped model explanation text on the right, with acceleration and
+curvature plots below the camera image. Control/discrete tokens are omitted
+from display text only; the raw JSON output is unchanged. Token-only output is
+explicitly labeled as lacking readable explanation. Long explanations are
+visibly truncated in the display; use raw JSON for the complete text. The
+OpenCV Hershey font is intended for the model's English/ASCII output.
+
+Without both `--preview-speed-mps` and `--preview-dt`, no XY path is invented:
+the dashboard shows the raw action curves and a missing-assumptions notice.
+With both supplied, the renderer holds each `(accel, curvature)` pair for one
+timestep, integrates speed and heading, and draws a **schematic bird's-eye
+path**, not a projection onto the camera. Green segments join circular
+waypoints; yellow triangles indicate direction and a magenta triangle marks
+the initial ego position. Forward is up and left is left, with equal metric
+scale on both axes. Positive curvature turns left. Speed is clamped at zero
+when braking, so reversing is not modeled. Labels show the supplied assumptions;
+they are not inferred from the example trajectory or measured from the video.
+These visualization arguments are also accepted by `alpaway_real` directly.
+
+ESC stops the display between inference calls. Inference itself is
+synchronous, so the GUI may pause while a request runs. For a finite
+`--max-windows` run with `--show`, the final result stays visible until a key
+is pressed. Headless runs without `--show` do not open a window or wait for
+keyboard input.
+
+For manual execution with a separately running trajectory producer:
+
+```bash
+export ENGINE_ROOT="$PWD/tensorrt-edgellm-workspace/R1_10B/engines"
+export LLM_ENGINE_DIR="$PWD/tensorrt-edgellm-workspace/R1_10B/engines-fp16-diagnostic/llm"
+export EDGELLM_PLUGIN_PATH="$PWD/build-orin/libNvInfer_edgellm_plugin.so"
+export TRT_PACKAGE_DIR=/usr
+export LD_LIBRARY_PATH="$TRT_PACKAGE_DIR/lib:/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
+./build-orin/examples/llm/alpaway_real \
+  --camera-config examples/configs/camera_video_5e9a00f1.json \
+  --trajectory-file /tmp/alpaway-smoke-trajectory.json \
+  --engine-dir "$LLM_ENGINE_DIR" \
+  --multimodal-engine-dir "$ENGINE_ROOT" \
+  --max-windows 1
+```
+
+Start the smoke trajectory producer below before this command. On this local
+workspace, `VLA_tests/selected/26f8dc7e-a9a2-4302-b847-af2009abf677/input_action.json`
+is an existing offline template for that producer; its example history is not
+measured motion from the selected clip. Those local dataset/template files are
+not distributed with the repository. Do not pass literal `/path/to/...`
+placeholders. In the generic command, unset `WORKSPACE_DIR` and `MODEL_NAME`
+expand to `//engines/llm`; set them first or use `ENGINE_ROOT` as above.
+`LLM_ENGINE_DIR` selects the separately built FP16 baseline described below;
+it must exist before running this command. Visual/action engines are still
+loaded from `ENGINE_ROOT`. Do not replace only a config or tokenizer file to
+change an engine's precision.
+
+Each `stream_cameras` entry must appear in this order: `front_wide`,
+`front_tele`, `cross_left`, `cross_right`. `type` is `usb` (integer `device`),
+`rtsp` (URL `source`), `gstreamer` (pipeline `source`), or `file` (video path
+`source`). OpenCV must have the corresponding backend installed. Do not commit
+URLs containing credentials. The ShengTai example contains calibration data
+and empty/invalid source placeholders: supply actual sources and verify their
+viewpoints. The original `front/back/left/right` calibration is not a mapping
+to the four model roles. Calibration is retained for integration but is not
+applied by this example; no undistortion or extrinsic transformation is done.
+
+The program keeps capturing while inference runs, samples four time steps at
+approximately 0.5-second intervals, and passes 16 RGB images directly as
+in-memory tensors in time-major camera order. It drops a window when sampling
+is delayed and fails if fresh frames are unavailable. Host receipt times must
+be at most 250 ms old and 100 ms apart; these checks **do not establish exposure
+synchronization**. Video files are independently paced and are only smoke-test
+inputs. For real cameras, confirm source latency, exposure synchronization,
+viewpoints and calibration separately. Capture backends may buffer frames or
+block on reads; RTSP requests five-second open/read timeouts, while other
+backends depend on their own timeout configuration.
+
+The trajectory producer must atomically replace a JSON file containing 16
+time-ordered measured positions in the model's expected ego coordinate frame,
+with the newest measurement time in Unix milliseconds:
+
+```json
+{"timestamp_ms": 1730000000000, "trajectory": [[0, 0, 0], "... 15 more [x,y,z] points ..."]}
+```
+
+This abbreviated JSON is illustrative, not valid input. The timestamp must be
+within one second of the latest host-received image; this does not prove that
+the whole history matches the image window. No stale, fabricated or static
+trajectory is substituted. For a smoke test only, an external producer may
+replay the example history from the offline input with a refreshed timestamp;
+that history is not measured vehicle motion and must not be used for real
+driving. `vehicle::TrajectoryHistory::updateTrajectory()` accepts a complete
+history directly, `saveJson()` atomically publishes it, and `loadJson()` reads
+it. An in-process integration can instead supply `points()` to the request.
+
+For local smoke testing only, the following producer replays the trajectory in
+an existing offline input JSON. Run it in another terminal, pass the output
+path as `--trajectory-file`, and stop it with Ctrl-C after the test:
+
+```bash
+python3 - /path/to/input_action.json /tmp/alpaway-smoke-trajectory.json <<'PY'
+import json, os, sys, time
+
+with open(sys.argv[1]) as f:
+    request = json.load(f)["requests"][0]
+points = next(item["trajectory"] for message in request["messages"]
+              for item in message["content"] if item["type"] == "trajectory")
+while True:
+    temporary = sys.argv[2] + ".tmp"
+    with open(temporary, "w") as f:
+        json.dump({"timestamp_ms": time.time_ns() // 1_000_000,
+                   "trajectory": points}, f)
+    os.replace(temporary, sys.argv[2])
+    time.sleep(0.1)
+PY
+```
+
+For an SDK callback, `cameras::FrameBuffer::publish(cameraIndex, bgr,
+steady_clock_timestamp)` copies a BGR frame into one of the four slots.
+`FrameBuffer` implements the same `FrameSource` interface as `CameraRig`:
+replace the constructed `CameraRig`/`frameSource` in the example with the
+SDK-backed buffer and start the SDK producer before sampling. The timestamp
+must use the host steady clock, strictly increase per camera, and describe host
+receipt time; preserve and validate sensor exposure timestamps separately.
+Published buffers are copied, and snapshots retain ownership until inference
+finishes. The example prints one JSON result per completed window; logs may
+also appear on stdout. `--show` displays the matched-frame dashboard and ESC exits.
+`--max-windows` bounds runs; absent that option, the example continues until
+interrupted, a stream ends, or an error occurs.
+
+### Repeated discrete tokens instead of language
+
+`<i1495>` is a model discrete token (ID 153164 in this local tokenizer), not a
+character-encoding error. A nonempty string consisting only of repeated
+discrete tokens is not a successful language-generation result. Likewise,
+64 finite action pairs establish an output shape, not driving accuracy.
+Do not hide the failure by stripping tokens, banning that particular token,
+or changing temperature.
+
+Local diagnosis on 2026-11-19 reproduced this behavior with the existing
+approximately 7.8 GiB LLM engine in both offline VLA and text-only requests.
+The captured pre-sampling logits were finite and ranked those discrete tokens
+highest. With the same runtime and visual/action engines, a separately built
+FP16 LLM restored natural-language output for both an offline VLA request and
+the four videos from clip `5e9a00f1-f575-43c8-a4e2-62e52a651dbb`; both VLA
+requests also returned 64 finite action pairs. This isolates the regression
+to the old LLM engine/artifact path, but does not distinguish quantization,
+export, and build defects within that path. The experimental text-only INT8
+calibration is not a qualified substitute for a multimodal FP16 baseline.
+
+The local FP16 baseline was built from the existing FP16 ONNX export without
+overwriting the old engine:
+
+```bash
+export MODEL_ROOT="$PWD/tensorrt-edgellm-workspace/R1_10B"
+export TRT_PACKAGE_DIR=/usr
+export LD_LIBRARY_PATH="$TRT_PACKAGE_DIR/lib:/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
+export EDGELLM_PLUGIN_PATH="$PWD/build-orin/libNvInfer_edgellm_plugin.so"
+# Use a new directory if this output already exists.
+./build-orin/examples/llm/llm_build \
+  --onnx-dir "$MODEL_ROOT/onnx/llm" \
+  --engine-dir "$MODEL_ROOT/engines-fp16-diagnostic/llm" \
+  --max-input-len 3424 \
+  --max-kv-cache-capacity 4096 \
+  --max-batch-size 1 \
+  --profiling-detailed
+```
+
+This local build took approximately 7.6 minutes and produced an approximately
+26 GiB LLM engine. It has substantial shared-memory requirements on Orin.
+The successful test only establishes recovery of language generation and the
+action output shape, not semantic or numerical equivalence to Hugging Face.
+The original export still reports model version 0.11.0 against runtime 0.11.1,
+and the reused visual/action engines still report device-compatibility
+warnings. For qualification, re-export with the matching software version,
+rebuild all engines on the target device, and compare against a reference
+using aligned measured inputs. Do not edit the version string to suppress
+the warning.

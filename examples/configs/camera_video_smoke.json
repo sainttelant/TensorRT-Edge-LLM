@@ -1,0 +1,24 @@
+{
+  "stream_cameras": [
+    {
+      "role": "front_wide",
+      "type": "file",
+      "source": "datasets/data/26f8dc7e-a9a2-4302-b847-af2009abf677.camera_front_wide_120fov.mp4"
+    },
+    {
+      "role": "front_tele",
+      "type": "file",
+      "source": "datasets/data/26f8dc7e-a9a2-4302-b847-af2009abf677.camera_front_tele_30fov.mp4"
+    },
+    {
+      "role": "cross_left",
+      "type": "file",
+      "source": "datasets/data/26f8dc7e-a9a2-4302-b847-af2009abf677.camera_cross_left_120fov.mp4"
+    },
+    {
+      "role": "cross_right",
+      "type": "file",
+      "source": "datasets/data/26f8dc7e-a9a2-4302-b847-af2009abf677.camera_cross_right_120fov.mp4"
+    }
+  ]
+}

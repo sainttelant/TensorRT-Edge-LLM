@@ -37,6 +37,43 @@ if(NOT WIN32)
     llm_stream PRIVATE ${COMMON_INCLUDE_DIRS}
                        ${CMAKE_SOURCE_DIR}/examples/utils)
   add_cross_build_link_options(llm_stream)
+
+  option(BUILD_ALPAWAY_REAL "Build the OpenCV live-camera Alpamayo example" OFF)
+  if(BUILD_ALPAWAY_REAL)
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio highgui)
+    add_library(
+      alpawayRender STATIC
+      ${CMAKE_SOURCE_DIR}/examples/utils/renders/Render.cpp)
+    target_include_directories(
+      alpawayRender PUBLIC ${CMAKE_SOURCE_DIR}/examples/utils
+                           ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(alpawayRender PUBLIC ${OpenCV_LIBS})
+    add_executable(
+      alpaway_real alpaway_real.cpp
+      ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/Cameras_help.cpp
+      ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/vehicle_control.cpp)
+    target_include_directories(
+      alpaway_real PRIVATE ${COMMON_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS}
+                           ${CMAKE_SOURCE_DIR}/examples/Sensors/includes)
+    target_link_libraries(alpaway_real PRIVATE edgellmCore commonLibraryExt
+                                             alpawayRender ${OpenCV_LIBS})
+    add_cross_build_link_options(alpaway_real)
+    if(BUILD_UNIT_TESTS)
+      add_executable(
+        alpaway_sensor_tests
+        ${CMAKE_SOURCE_DIR}/examples/Sensors/tests/sensorTests.cpp
+        ${CMAKE_SOURCE_DIR}/examples/utils/renders/tests/renderTests.cpp
+        ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/Cameras_help.cpp
+        ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/vehicle_control.cpp)
+      target_include_directories(
+        alpaway_sensor_tests
+        PRIVATE ${COMMON_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS}
+                ${CMAKE_SOURCE_DIR}/examples/Sensors/includes)
+      target_link_libraries(
+        alpaway_sensor_tests PRIVATE gtest_main alpawayRender ${OpenCV_LIBS}
+                                    commonLibraryExt)
+    endif()
+  endif()
 endif()
 
 add_executable(llm_bench llm_bench.cpp)
