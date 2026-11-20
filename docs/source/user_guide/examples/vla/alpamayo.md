@@ -298,7 +298,7 @@ For manual execution with a separately running trajectory producer:
 
 ```bash
 export ENGINE_ROOT="$PWD/tensorrt-edgellm-workspace/R1_10B/engines"
-export LLM_ENGINE_DIR="$PWD/tensorrt-edgellm-workspace/R1_10B/engines-fp16-diagnostic/llm"
+export LLM_ENGINE_DIR="$PWD/tensorrt-edgellm-workspace/R1_10B/engines/llm"
 export EDGELLM_PLUGIN_PATH="$PWD/build-orin/lib/libNvInfer_edgellm_plugin.so"
 export TRT_PACKAGE_DIR=/usr
 export LD_LIBRARY_PATH="$TRT_PACKAGE_DIR/lib:/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
@@ -494,7 +494,7 @@ export EDGELLM_PLUGIN_PATH="$PWD/build-orin/lib/libNvInfer_edgellm_plugin.so"
 # Use a new directory if this output already exists.
 ./build-orin/bin/llm_build \
   --onnx-dir "$MODEL_ROOT/onnx/llm" \
-  --engine-dir "$MODEL_ROOT/engines-fp16-diagnostic/llm" \
+  --engine-dir "$MODEL_ROOT/engines/llm" \
   --max-input-len 3424 \
   --max-kv-cache-capacity 4096 \
   --max-batch-size 1 \

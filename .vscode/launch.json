@@ -7,22 +7,22 @@
             "request": "launch",
             "program": "${workspaceFolder}/build-orin-debug/bin/action_inference",
             "args": [
-                "--engineDir",
+                "--engine-dir",
                 "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/engines/llm",
-                "--multimodalEngineDir",
+                "--multimodal-engine-dir",
                 "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/engines",
-                "--checkpointDir",
+                "--checkpoint-dir",
                 "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/checkpoint",
-                "--inputFile",
+                "--input-file",
                 "${workspaceFolder}/VLA_tests/selected/26f8dc7e-a9a2-4302-b847-af2009abf677/input_action.json",
-                "--outputFile",
+                "--output-file",
                 "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/output_action.json",
-                "--batchSize",
+                "--batch-size",
                 "1",
-                "--noiseSeed",
+                "--noise-seed",
                 "5",
-                "--dumpProfile",
-                "--profileOutputFile",
+                "--dump-profile",
+                "--profile-output-file",
                 "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/profile_action.json"
             ],
             "stopAtEntry": false,
@@ -34,7 +34,7 @@
                 },
                 {
                     "name": "EDGELLM_PLUGIN_PATH",
-                    "value": "${workspaceFolder}/build-orin-debug/libNvInfer_edgellm_plugin.so"
+                    "value": "${workspaceFolder}/build-orin-debug/lib/libNvInfer_edgellm_plugin.so"
                 }
             ],
             "externalConsole": false,

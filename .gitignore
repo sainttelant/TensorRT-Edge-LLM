@@ -41,3 +41,8 @@ CLAUDE.local.md
 .claude/settings.local.json
 .claude/projects
 .claude/scheduled_tasks.lock
+
+#ingore folders
+VLA_tests/
+datasets/
+tensorrt-edgellm-workspace/

@@ -19,7 +19,7 @@ set -euo pipefail
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-${REPO_DIR}/build-orin}"
 MODEL_ROOT="${MODEL_ROOT:-${REPO_DIR}/tensorrt-edgellm-workspace/R1_10B}"
-LLM_ENGINE_DIR="${LLM_ENGINE_DIR:-${MODEL_ROOT}/engines-fp16-diagnostic/llm}"
+LLM_ENGINE_DIR="${LLM_ENGINE_DIR:-${MODEL_ROOT}/engines/llm}"
 MULTIMODAL_ENGINE_DIR="${MULTIMODAL_ENGINE_DIR:-${MODEL_ROOT}/engines}"
 CAMERA_CONFIG="${CAMERA_CONFIG:-${REPO_DIR}/examples/configs/camera_video_5e9a00f1.json}"
 TRAJECTORY_TEMPLATE="${TRAJECTORY_TEMPLATE:-${REPO_DIR}/VLA_tests/selected/26f8dc7e-a9a2-4302-b847-af2009abf677/input_action.json}"
@@ -43,7 +43,7 @@ Environment overrides:
   MODEL_ROOT              Model workspace root.
   LLM_ENGINE_DIR          FP16 LLM engine directory.
   MULTIMODAL_ENGINE_DIR   Directory containing visual/ and action/ engines.
-  BUILD_DIR               Build directory containing alpaway_real and its plugin.
+  BUILD_DIR               Build directory with bin/alpaway_real and lib/libNvInfer_edgellm_plugin.so.
   TRT_PACKAGE_DIR         TensorRT package root (default: /usr).
   EDGELLM_PLUGIN_PATH      Override the plugin library path.
 EOF

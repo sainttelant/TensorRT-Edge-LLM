@@ -18,6 +18,8 @@ set -euo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-${REPO_DIR}/build-orin}"
+BIN_DIR="${BUILD_DIR}/bin"
+PLUGIN_PATH="${BUILD_DIR}/lib/libNvInfer_edgellm_plugin.so"
 MODEL_ROOT="${MODEL_ROOT:-${REPO_DIR}/tensorrt-edgellm-workspace/R1_10B}"
 ONNX_DIR="${ONNX_DIR:-${MODEL_ROOT}/onnx}"
 ENGINE_DIR="${ENGINE_DIR:-${MODEL_ROOT}/engines}"
@@ -40,8 +42,9 @@ Reuse existing engines and build only missing components.
 With --inference, run action inference after preparing missing artifacts.
 Set MODEL_ROOT, ONNX_DIR, ENGINE_DIR, BUILD_DIR,
 TRT_PACKAGE_DIR, CUDA_DIR, or BUILD_JOBS to override the defaults.
-ONNX_DIR defaults to MODEL_ROOT/quantizedonnx. INT8 quantization is encoded
-in the LLM ONNX graph; no separate --int8 builder option is needed.
+Programs are under BUILD_DIR/bin and the plugin is under BUILD_DIR/lib.
+ONNX_DIR defaults to MODEL_ROOT/onnx. For --quantinize, set ONNX_DIR to
+the quantized export directory. No separate --int8 builder option is needed.
 
 Options:
   --check-only  Check prerequisites for the selected mode without running.
@@ -95,10 +98,10 @@ command -v tee >/dev/null 2>&1 || fail "tee is required."
 
 MISSING_COMPONENTS=()
 BUILD_TARGETS=()
-if [[ ! -s "${BUILD_DIR}/libNvInfer_edgellm_plugin.so" ]]; then
+if [[ ! -s "$PLUGIN_PATH" ]]; then
     BUILD_TARGETS+=(NvInfer_edgellm_plugin)
 fi
-if [[ ! -x "${BUILD_DIR}/examples/multimodal/action_inference" ]]; then
+if [[ ! -x "${BIN_DIR}/action_inference" ]]; then
     BUILD_TARGETS+=(action_inference)
 fi
 for component in llm visual action; do
@@ -119,12 +122,7 @@ for component in llm visual action; do
     [[ -s "${component_dir}/model.onnx" ]] || fail "Missing ONNX graph: ${component_dir}/model.onnx"
     [[ -s "${component_dir}/model.onnx.data" ]] || fail "Missing ONNX external weights: ${component_dir}/model.onnx.data"
     [[ -s "${component_dir}/config.json" ]] || fail "Missing component config: ${component_dir}/config.json"
-    if [[ "$component" == "llm" ]]; then
-        builder="${BUILD_DIR}/examples/llm/llm_build"
-    else
-        builder="${BUILD_DIR}/examples/multimodal/${component}_build"
-    fi
-    if [[ ! -x "$builder" ]]; then
+    if [[ ! -x "${BIN_DIR}/${component}_build" ]]; then
         BUILD_TARGETS+=("${component}_build")
     fi
 done
@@ -195,20 +193,20 @@ fi
 export LD_LIBRARY_PATH="${TRT_PACKAGE_DIR}/lib:${TRT_PACKAGE_DIR}/lib64:/usr/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 unset CUDA_VISIBLE_DEVICES
 mkdir -p "${MODEL_ROOT}/logs"
-export EDGELLM_PLUGIN_PATH="${BUILD_DIR}/libNvInfer_edgellm_plugin.so"
+export EDGELLM_PLUGIN_PATH="$PLUGIN_PATH"
 
 run_inference() {
     printf 'Running inference using prepared engines.\n'
-    "${BUILD_DIR}/examples/multimodal/action_inference" \
-        --engineDir "${ENGINE_DIR}/llm" \
-        --multimodalEngineDir "$ENGINE_DIR" \
-        --checkpointDir "$MODEL_DIR" \
-        --inputFile "$INPUT_FILE" \
-        --outputFile "$OUTPUT_FILE" \
-        --batchSize 1 \
-        --noiseSeed 5 \
-        --dumpProfile \
-        --profileOutputFile "${MODEL_ROOT}/profile_action.json" \
+    "${BIN_DIR}/action_inference" \
+        --engine-dir "${ENGINE_DIR}/llm" \
+        --multimodal-engine-dir "$ENGINE_DIR" \
+        --checkpoint-dir "$MODEL_DIR" \
+        --input-file "$INPUT_FILE" \
+        --output-file "$OUTPUT_FILE" \
+        --batch-size 1 \
+        --noise-seed 5 \
+        --dump-profile \
+        --profile-output-file "${MODEL_ROOT}/profile_action.json" \
         2>&1 | tee "${MODEL_ROOT}/logs/inference-action.log"
     [[ -s "$OUTPUT_FILE" ]] || fail "Inference completed without a non-empty output: $OUTPUT_FILE"
     printf 'Orin inference completed successfully.\n'
@@ -232,28 +230,28 @@ fi
 for component in "${MISSING_COMPONENTS[@]}"; do
     case "$component" in
         llm)
-            "${BUILD_DIR}/examples/llm/llm_build" \
-                --onnxDir "${ONNX_DIR}/llm" \
-                --engineDir "${ENGINE_DIR}/llm" \
-                --maxInputLen 3424 \
-                --maxKVCacheCapacity 4096 \
-                --maxBatchSize 1 \
+            "${BIN_DIR}/llm_build" \
+                --onnx-dir "${ONNX_DIR}/llm" \
+                --engine-dir "${ENGINE_DIR}/llm" \
+                --max-input-len 3424 \
+                --max-kv-cache-capacity 4096 \
+                --max-batch-size 1 \
                 2>&1 | tee "${MODEL_ROOT}/logs/build-llm.log"
             ;;
         visual)
-            "${BUILD_DIR}/examples/multimodal/visual_build" \
-                --onnxDir "${ONNX_DIR}/visual" \
-                --engineDir "$ENGINE_DIR" \
-                --minImageTokens 160 \
-                --maxImageTokens 18432 \
-                --maxImageTokensPerImage 192 \
+            "${BIN_DIR}/visual_build" \
+                --onnx-dir "${ONNX_DIR}/visual" \
+                --engine-dir "$ENGINE_DIR" \
+                --min-image-tokens 160 \
+                --max-image-tokens 18432 \
+                --max-image-tokens-per-image 192 \
                 2>&1 | tee "${MODEL_ROOT}/logs/build-visual.log"
             ;;
         action)
-            "${BUILD_DIR}/examples/multimodal/action_build" \
-                --onnxDir "${ONNX_DIR}/action" \
-                --engineDir "$ENGINE_DIR" \
-                --maxBatchSize 1 \
+            "${BIN_DIR}/action_build" \
+                --onnx-dir "${ONNX_DIR}/action" \
+                --engine-dir "$ENGINE_DIR" \
+                --max-batch-size 1 \
                 2>&1 | tee "${MODEL_ROOT}/logs/build-action.log"
             ;;
     esac

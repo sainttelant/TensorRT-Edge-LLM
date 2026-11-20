@@ -553,19 +553,20 @@ scp -r /workspace/R1_10B "$TARGET:$REMOTE_ROOT/checkpoint"
 
 `quantizedonnx/` 中的 LLM 图采用 INT8 SmoothQuant（W8A8），量化由 ONNX 的 QuantizeLinear/DequantizeLinear 节点表达；当前 `config.json` 中 KV cache 仍为 FP16，visual/action 图也不因此自动变成 INT8。TensorRT Edge-LLM 的 builder 以强类型网络解析 ONNX，按图中的 Q/DQ 量化构建，不需要也不支持额外传入 `--int8`。请传输完整 `quantizedonnx/`，包括 `model.onnx.data` 和各组件配置。
 
-在仓库根目录运行 [build_orin.bash](build_orin.bash)。脚本逐组件复用已有的非空 engine 和配置，只为缺失组件检查 ONNX 并构建；仅在程序或插件缺失时检查编译环境并运行 CMake，配置 SM87。默认模型路径是 `tensorrt-edgellm-workspace/R1_10B`，默认 ONNX 输入为 `tensorrt-edgellm-workspace/R1_10B/quantizedonnx`；如实际位置不同，通过环境变量覆盖：
+在仓库根目录运行 [build_orin.bash](build_orin.bash)。脚本逐组件复用已有的非空 engine 和配置，只为缺失组件检查 ONNX 并构建；仅在程序或插件缺失时检查编译环境并运行 CMake，配置 SM87。默认 CMake 产物在 `build-orin/bin/`（可执行文件）和 `build-orin/lib/`（插件）。默认模型路径是 `tensorrt-edgellm-workspace/R1_10B`，默认 ONNX 输入为 `tensorrt-edgellm-workspace/R1_10B/onnx`；量化导出需显式指定：
 
 ```bash
 cd /home/nvidia/disklarge/TensorRT-Edge-LLM
 ./build_orin.bash --check-only
 ./build_orin.bash --buildonly
 # 忽略已有的 LLM engine，从 quantizedonnx/ 重新构建量化 engine
-./build_orin.bash --buildonly --quantinize
+ONNX_DIR="$PWD/tensorrt-edgellm-workspace/R1_10B/quantizedonnx" \
+  ./build_orin.bash --buildonly --quantinize
 ```
 
-`--buildonly` 只准备 engines，不执行推理，也不要求输入 JSON 或 checkpoint；已有组件直接复用，缺失组件才构建。不带模式选项时行为相同。`--quantinize`（也接受常见拼法 `--quantize`）会强制从 `ONNX_DIR/llm/model.onnx` 重新构建 LLM engine，即使目标 engine 已存在；visual/action engine 仍按需复用。默认 `ONNX_DIR` 是 `quantizedonnx/`，如指定其他目录，请确认它包含要构建的量化 LLM ONNX。该选项可与 `--buildonly`、`--inference` 或 `--check-only` 一起使用；`--buildonly` 与 `--inference` 仍互斥。
+`--buildonly` 只准备 engines，不执行推理，也不要求输入 JSON 或 checkpoint；已有组件直接复用，缺失组件才构建。不带模式选项时行为相同。`--quantinize`（也接受常见拼法 `--quantize`）会强制从 `ONNX_DIR/llm/model.onnx` 重新构建 LLM engine，即使目标 engine 已存在；visual/action engine 仍按需复用。该选项不会自动量化，请确认 `ONNX_DIR` 指向量化导出。该选项可与 `--buildonly`、`--inference` 或 `--check-only` 一起使用；`--buildonly` 与 `--inference` 仍互斥。
 
-脚本默认使用 `MODEL_ROOT=$REPO_DIR/tensorrt-edgellm-workspace/R1_10B`、`ONNX_DIR=$MODEL_ROOT/quantizedonnx`、`TRT_PACKAGE_DIR=/usr`、系统 CUDA，并将构建日志写入 `$MODEL_ROOT/logs/`。也可将 `ONNX_DIR` 指向其他导出目录；构建前脚本会打印实际使用的目录。可通过 `MODEL_ROOT`、`ONNX_DIR`、`ENGINE_DIR`、`MODEL_DIR`、`BUILD_DIR`、`TRT_PACKAGE_DIR`、`CUDA_DIR` 和 `BUILD_JOBS` 环境变量覆盖路径或并行度。builder 参数固定为本次导出的 batch=1 配置；LLM 的 KV cache 容量为 4096，与 action 配置一致。
+脚本默认使用 `MODEL_ROOT=$REPO_DIR/tensorrt-edgellm-workspace/R1_10B`、`ONNX_DIR=$MODEL_ROOT/onnx`、`TRT_PACKAGE_DIR=/usr`、系统 CUDA，并将构建日志写入 `$MODEL_ROOT/logs/`。也可将 `ONNX_DIR` 指向其他导出目录；构建前脚本会打印实际使用的目录。可通过 `MODEL_ROOT`、`ONNX_DIR`、`ENGINE_DIR`、`MODEL_DIR`、`BUILD_DIR`、`TRT_PACKAGE_DIR`、`CUDA_DIR` 和 `BUILD_JOBS` 环境变量覆盖路径或并行度。builder 参数固定为本次导出的 batch=1 配置；LLM 的 KV cache 容量为 4096，与 action 配置一致。
 
 本次已在 Orin 上完成三个 engine 的构建，产物位于 `$MODEL_ROOT/engines/`。不要将其他 GPU 架构上生成的 TensorRT engine 用于 Orin。
 
