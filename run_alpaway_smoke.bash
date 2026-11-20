@@ -76,8 +76,9 @@ done
 
 cd "$REPO_DIR"
 command -v python3 >/dev/null || fail "python3 is required."
-[[ -x "${BUILD_DIR}/examples/llm/alpaway_real" ]] || fail "Build alpaway_real first."
-export EDGELLM_PLUGIN_PATH="${EDGELLM_PLUGIN_PATH:-${BUILD_DIR}/libNvInfer_edgellm_plugin.so}"
+ALPAWAY_BIN="${BUILD_DIR}/bin/alpaway_real"
+[[ -x "$ALPAWAY_BIN" ]] || fail "Build alpaway_real first: $ALPAWAY_BIN"
+export EDGELLM_PLUGIN_PATH="${EDGELLM_PLUGIN_PATH:-${BUILD_DIR}/lib/libNvInfer_edgellm_plugin.so}"
 for file in "$CAMERA_CONFIG" "$TRAJECTORY_TEMPLATE" "$EDGELLM_PLUGIN_PATH" \
     "${LLM_ENGINE_DIR}/llm.engine" "${LLM_ENGINE_DIR}/config.json" \
     "${MULTIMODAL_ENGINE_DIR}/visual/visual.engine" "${MULTIMODAL_ENGINE_DIR}/visual/config.json" \
@@ -158,7 +159,7 @@ for ((attempt = 0; attempt < 100; ++attempt)); do
 done
 [[ -s "${TEMP_DIR}/trajectory.json" ]] || fail "Timed out waiting for the example trajectory."
 
-"${BUILD_DIR}/examples/llm/alpaway_real" \
+"$ALPAWAY_BIN" \
     --camera-config "$CAMERA_CONFIG" \
     --trajectory-file "${TEMP_DIR}/trajectory.json" \
     --engine-dir "$LLM_ENGINE_DIR" \

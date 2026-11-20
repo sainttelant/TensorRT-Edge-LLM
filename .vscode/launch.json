@@ -5,7 +5,7 @@
             "name": "Alpamayo: action inference (C++ debug)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build-orin-debug/examples/multimodal/action_inference",
+            "program": "${workspaceFolder}/build-orin-debug/bin/action_inference",
             "args": [
                 "--engineDir",
                 "${workspaceFolder}/tensorrt-edgellm-workspace/R1_10B/engines/llm",

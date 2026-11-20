@@ -18,6 +18,15 @@ Alpamayo-R1-10B runs as a chained VLM + action pipeline:
 
 Both stages are run with a single `action_inference` invocation. The engines are built separately and loaded together at runtime.
 
+For ONNX export, `--tp-size` selects the LLM's TP size and the compatible
+action model: TP=1 uses paged prefix reuse, and TP>1 uses dense KV inputs.
+The action engine runs on one device in both cases.
+
+For the [direct engine builder](../../getting_started/direct-engine-builder.md),
+Alpamayo action builds default to `--reuse-llm-kv-cache=true` for an LLM
+using TP=1. For an LLM using TP>1, build action separately with
+`--components action --reuse-llm-kv-cache=false`.
+
 The current TensorRT Edge-LLM input parser accepts image files, text, and
 trajectory history points as `[x, y, z]`. The action output is written as
 `output_trajectory`, a list of `(accel, kappa)` acceleration and curvature pairs.
@@ -45,7 +54,16 @@ trtedge export \
 
 This creates `onnx/llm`, `onnx/visual`, and `onnx/action`.
 
-> **Note:** Only FP16 is supported for Alpamayo export. The `--max-kv-cache-capacity` value must match the `--max-kv-cache-capacity` used when building the LLM engine in Step 3.
+> **Note:** The export also reads the public
+> [`Qwen/Qwen3-VL-8B-Instruct`](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct)
+> configuration from Hugging Face.
+>
+> This guide covers the FP16 flow. Quantized export of the LLM is not covered
+> in 0.12.0; see [Limitations and Known Issues](../../getting_started/limitations.md).
+>
+> The action expert uses FP16 weights and action KV. The `--max-kv-cache-capacity`
+> value must match the `--max-kv-cache-capacity` used when building the LLM engine
+> in Step 3.
 
 An opt-in, experimental text-calibrated INT8 SmoothQuant language-backbone
 workflow is documented in
@@ -68,15 +86,15 @@ export MODEL_NAME=Alpamayo-R1-10B
 cd /path/to/TensorRT-Edge-LLM
 
 # Build language model engine
-./build/examples/llm/llm_build \
+./build/bin/llm_build \
   --onnx-dir $WORKSPACE_DIR/$MODEL_NAME/onnx/llm \
   --engine-dir $WORKSPACE_DIR/$MODEL_NAME/engines/llm \
   --max-input-len 3424 \
   --max-kv-cache-capacity 4096 \
-  --max-batch-size 6
+  --max-batch-size 1
 
 # Build visual encoder engine
-./build/examples/multimodal/visual_build \
+./build/bin/visual_build \
   --onnx-dir $WORKSPACE_DIR/$MODEL_NAME/onnx/visual \
   --engine-dir $WORKSPACE_DIR/$MODEL_NAME/engines \
   --min-image-tokens 160 \
@@ -84,23 +102,38 @@ cd /path/to/TensorRT-Edge-LLM
   --max-image-tokens-per-image 192
 
 # Build action expert engine
-./build/examples/multimodal/action_build \
+./build/bin/action_build \
   --onnx-dir $WORKSPACE_DIR/$MODEL_NAME/onnx/action \
   --engine-dir $WORKSPACE_DIR/$MODEL_NAME/engines \
-  --max-batch-size 6
+  --max-batch-size 1
 ```
+
+Use `--max-batch-size 1` for single-scene deployment, and the same value for
+the language model and action engines.
 
 `visual_build` writes `$WORKSPACE_DIR/$MODEL_NAME/engines/visual/`, and
 `action_build` writes `$WORKSPACE_DIR/$MODEL_NAME/engines/action/`. Both
 subdirectories are loaded through `--multimodal-engine-dir` during inference.
 
-## Step 4: Run Inference (Thor Device)
+## Step 4: Prepare an Input
 
-Create an input file `$WORKSPACE_DIR/input_action.json`. The `trajectory`
-content item provides past egomotion history as `[x, y, z]` positions. Replace
-the image paths with actual RGB image files. The checkpoint card describes the
-primary setting as 4 cameras over 4 timesteps; the runtime parser accepts the
-images as an ordered list of image content items.
+Alpamayo takes 4 cameras at 4 timesteps (16 images) and 16 egomotion history
+points. Build requests from the
+[NVIDIA PhysicalAI Autonomous Vehicles](https://huggingface.co/datasets/nvidia/PhysicalAI-Autonomous-Vehicles)
+dataset with the dataset preparation script. Accept the dataset license and run
+`hf auth login` first. Only the selected clips are downloaded:
+
+```bash
+pip install -r examples/accuracy/requirements-physical-ai-av.txt
+python examples/accuracy/scripts/prepare_dataset.py \
+  --dataset PhysicalAIAV \
+  --max_samples 1 \
+  --output_dir $WORKSPACE_DIR/physical_ai_av
+```
+
+Copy the output directory to the device. Each request has this format, and you
+can also write one by hand. The `trajectory` item provides past egomotion
+history as `[x, y, z]` positions:
 
 ```json
 {
@@ -173,19 +206,19 @@ images as an ordered list of image content items.
 }
 ```
 
-Run inference:
+## Step 5: Run Inference (Thor Device)
 
 ```bash
 cd /path/to/TensorRT-Edge-LLM
 
-./build/examples/multimodal/action_inference \
+./build/bin/action_inference \
   --engine-dir $WORKSPACE_DIR/$MODEL_NAME/engines/llm \
   --multimodal-engine-dir $WORKSPACE_DIR/$MODEL_NAME/engines \
-  --input-file $WORKSPACE_DIR/input_action.json \
+  --input-file $WORKSPACE_DIR/physical_ai_av/physical_ai_av_dataset.json \
   --output-file $WORKSPACE_DIR/output_action.json
 ```
 
-Check `output_action.json` for the response. Each entry includes `output_text` (VLM language output) and `output_trajectory` (predicted (accel, kappa) acceleration and curvature pairs).
+Check `output_action.json` for the response. Each entry includes `output_text` (VLM language output) and `output_trajectory` (64 predicted (accel, kappa) acceleration and curvature pairs).
 
 ## Live camera example (experimental)
 
@@ -198,8 +231,8 @@ export TRT_PACKAGE_DIR=/usr
 cmake -S . -B build-orin -DTRT_PACKAGE_DIR="$TRT_PACKAGE_DIR" -DBUILD_ALPAWAY_REAL=ON
 cmake --build build-orin --target alpaway_real -j2
 export LD_LIBRARY_PATH="$TRT_PACKAGE_DIR/lib:/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
-export EDGELLM_PLUGIN_PATH="$PWD/build-orin/libNvInfer_edgellm_plugin.so"
-./build-orin/examples/llm/alpaway_real \
+export EDGELLM_PLUGIN_PATH="$PWD/build-orin/lib/libNvInfer_edgellm_plugin.so"
+./build-orin/bin/alpaway_real \
   --camera-config examples/configs/camera_video_smoke.json \
   --trajectory-file /path/to/trajectory.json \
   --engine-dir "$WORKSPACE_DIR/$MODEL_NAME/engines/llm" \
@@ -266,10 +299,10 @@ For manual execution with a separately running trajectory producer:
 ```bash
 export ENGINE_ROOT="$PWD/tensorrt-edgellm-workspace/R1_10B/engines"
 export LLM_ENGINE_DIR="$PWD/tensorrt-edgellm-workspace/R1_10B/engines-fp16-diagnostic/llm"
-export EDGELLM_PLUGIN_PATH="$PWD/build-orin/libNvInfer_edgellm_plugin.so"
+export EDGELLM_PLUGIN_PATH="$PWD/build-orin/lib/libNvInfer_edgellm_plugin.so"
 export TRT_PACKAGE_DIR=/usr
 export LD_LIBRARY_PATH="$TRT_PACKAGE_DIR/lib:/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
-./build-orin/examples/llm/alpaway_real \
+./build-orin/bin/alpaway_real \
   --camera-config examples/configs/camera_video_5e9a00f1.json \
   --trajectory-file /tmp/alpaway-smoke-trajectory.json \
   --engine-dir "$LLM_ENGINE_DIR" \
@@ -363,6 +396,73 @@ also appear on stdout. `--show` displays the matched-frame dashboard and ESC exi
 `--max-windows` bounds runs; absent that option, the example continues until
 interrupted, a stream ends, or an error occurs.
 
+### Rebuild Orin engines after a plugin upgrade
+
+If `alpaway_real` fails while loading `llm.engine` with `XQA JIT blob does
+not start with the expected magic word`, the serialized engine was built with
+an incompatible Edge-LLM plugin. This was observed when loading the old Orin
+FP16 engine with the 0.12.0 runtime. The failure happens before processing the
+camera inputs; changing the video configuration or editing `config.json` does
+not fix it.
+
+On the target Orin, build the `llm_build`, `visual_build`, `action_build`, and
+`alpaway_real` targets from the same checkout configured with
+`BUILD_ALPAWAY_REAL=ON`. Use the same `NvInfer_edgellm_plugin` library for
+engine build and inference.
+
+An engine can build successfully from an older ONNX export but still fail
+runtime initialization. In the 0.12.0 Orin smoke test, rebuilding from the
+old export cleared the XQA error and initialized the visual runner, but the
+old action graph failed with `Action engine KV contract does not match LLM
+tensor parallelism`. For TP=1, use a current exporter that emits the paged
+prefix KV inputs. Rebuild the action engine from that export; do not edit the
+engine metadata or bypass the runtime check.
+
+On the export host, use the matching checkout and an existing Alpamayo
+checkpoint (see [Step 1](#step-1-export-x86-host)):
+
+```bash
+trtedge export "$CHECKPOINT_DIR" "$WORKSPACE_DIR/$MODEL_NAME/onnx-fp16-v0.12.0" \
+  --tp-size 1 --max-kv-cache-capacity 4096
+```
+
+Transfer `onnx-fp16-v0.12.0/` to the Orin, including the external weight
+files and other export sidecars. Build into a fresh directory so the
+previous engines remain available:
+
+```bash
+export MODEL_ROOT="$PWD/tensorrt-edgellm-workspace/R1_10B"
+export TRT_PACKAGE_DIR=/usr
+export LD_LIBRARY_PATH="$TRT_PACKAGE_DIR/lib:/usr/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export EDGELLM_PLUGIN_PATH="$PWD/build-orin/lib/libNvInfer_edgellm_plugin.so"
+ONNX_ROOT="$MODEL_ROOT/onnx-fp16-v0.12.0"
+ENGINE_ROOT="$MODEL_ROOT/engines-fp16-v0.12.0-tp1"
+
+mkdir "$ENGINE_ROOT" && \
+./build-orin/bin/llm_build \
+  --onnx-dir "$ONNX_ROOT/llm" \
+  --engine-dir "$ENGINE_ROOT/llm" \
+  --max-input-len 3424 --max-kv-cache-capacity 4096 --max-batch-size 1 \
+  --profiling-detailed && \
+./build-orin/bin/visual_build \
+  --onnx-dir "$ONNX_ROOT/visual" \
+  --engine-dir "$ENGINE_ROOT" \
+  --min-image-tokens 160 --max-image-tokens 18432 --max-image-tokens-per-image 192 && \
+./build-orin/bin/action_build \
+  --onnx-dir "$ONNX_ROOT/action" \
+  --engine-dir "$ENGINE_ROOT" \
+  --max-batch-size 1
+```
+
+After all three builds succeed, point both engine overrides at the rebuilt
+set. Run headless first; add `--show` for the dashboard on a device with a
+working display.
+
+```bash
+LLM_ENGINE_DIR="$ENGINE_ROOT/llm" MULTIMODAL_ENGINE_DIR="$ENGINE_ROOT" \
+  ./run_alpaway_smoke.bash --max-windows 1
+```
+
 ### Repeated discrete tokens instead of language
 
 `<i1495>` is a model discrete token (ID 153164 in this local tokenizer), not a
@@ -390,9 +490,9 @@ overwriting the old engine:
 export MODEL_ROOT="$PWD/tensorrt-edgellm-workspace/R1_10B"
 export TRT_PACKAGE_DIR=/usr
 export LD_LIBRARY_PATH="$TRT_PACKAGE_DIR/lib:/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
-export EDGELLM_PLUGIN_PATH="$PWD/build-orin/libNvInfer_edgellm_plugin.so"
+export EDGELLM_PLUGIN_PATH="$PWD/build-orin/lib/libNvInfer_edgellm_plugin.so"
 # Use a new directory if this output already exists.
-./build-orin/examples/llm/llm_build \
+./build-orin/bin/llm_build \
   --onnx-dir "$MODEL_ROOT/onnx/llm" \
   --engine-dir "$MODEL_ROOT/engines-fp16-diagnostic/llm" \
   --max-input-len 3424 \
