@@ -46,6 +46,18 @@ struct TrajectoryPreview
     double timeStepSeconds;
 };
 
+//! Calibration transforms ego-frame meters into the OpenCV camera frame.
+struct CameraCalibration
+{
+    cv::Size imageSize;
+    cv::Matx33d intrinsic;
+    cv::Matx33d egoToCameraRotation;
+    cv::Vec3d egoToCameraTranslation;
+    std::vector<double> distortion;
+    bool fisheye;
+    double groundZMeters;
+};
+
 //! Integrate (acceleration in m/s^2, curvature in 1/m) into ego-frame (forward, left) meters.
 //! Each action is held for one timestep. Speed is clamped at zero; reversing is not modeled.
 std::vector<cv::Point2d> integrateTrajectory(
@@ -69,7 +81,8 @@ public:
     //! Discrete/control tokens are omitted only from display text; the caller retains raw output.
     cv::Mat dashboard(cv::Mat const& frame, std::string const& explanation,
         std::vector<std::pair<float, float>> const& actions,
-        std::optional<TrajectoryPreview> const& preview = std::nullopt);
+        std::optional<TrajectoryPreview> const& preview = std::nullopt,
+        std::optional<CameraCalibration> const& calibration = std::nullopt);
 
 private:
     cv::Scalar getColor(Color color);

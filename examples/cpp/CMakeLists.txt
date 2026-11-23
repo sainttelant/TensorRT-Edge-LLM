@@ -112,10 +112,12 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   option(BUILD_ALPAWAY_REAL "Build the OpenCV live-camera Alpamayo example" OFF)
   if(BUILD_ALPAWAY_REAL)
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio highgui)
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio highgui calib3d)
     set(_alpaway_sensors "${CMAKE_CURRENT_SOURCE_DIR}/../Sensors")
     set(_alpaway_utils "${CMAKE_CURRENT_SOURCE_DIR}/../utils")
     set(_alpaway_sensor_sources "${_alpaway_sensors}/srcs/Cameras_help.cpp"
+                                "${_alpaway_sensors}/srcs/camera.cpp"
+                                "${_alpaway_sensors}/srcs/cameraSources.cpp"
                                 "${_alpaway_sensors}/srcs/vehicle_control.cpp")
 
     add_library(alpawayRender STATIC "${_alpaway_utils}/renders/Render.cpp")

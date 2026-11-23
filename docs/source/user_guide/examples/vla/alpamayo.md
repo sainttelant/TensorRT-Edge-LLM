@@ -229,7 +229,7 @@ safety-validated driving system**. Do not send its output to actuators.
 ```bash
 export TRT_PACKAGE_DIR=/usr
 cmake -S . -B build-orin -DTRT_PACKAGE_DIR="$TRT_PACKAGE_DIR" -DBUILD_ALPAWAY_REAL=ON
-cmake --build build-orin --target alpaway_real -j2
+cmake --build build-orin --target alpaway_real -j16
 export LD_LIBRARY_PATH="$TRT_PACKAGE_DIR/lib:/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
 export EDGELLM_PLUGIN_PATH="$PWD/build-orin/lib/libNvInfer_edgellm_plugin.so"
 ./build-orin/bin/alpaway_real \
@@ -255,7 +255,7 @@ For the local `R1_10B` workspace and clip
 # On a device with a working graphical display:
 ./run_alpaway_smoke.bash --show
 # Schematic path with EXPLICIT visualization assumptions, not measured speed:
-./run_alpaway_smoke.bash --show --preview-speed-mps 2.0 --preview-dt 0.1
+./run_alpaway_smoke.bash --show --preview-speed-mps 8.66 --preview-dt 0.1
 ```
 
 This wrapper starts and monitors the example trajectory producer, waits for
@@ -267,6 +267,21 @@ not measured motion. Use `--max-windows N` to change the default single window.
 engine/build directories. Relative paths are resolved from the repository
 root. The local dataset, template and engines must already exist; the wrapper
 does not export models or build engines.
+
+The wrapper pauses all four offline videos while each inference request runs.
+With `--show`, playback remains paused at each result; press a key to resume
+or ESC to exit. Without `--show`, playback resumes after inference. Between
+requests, videos play at their original frame rate. To use the same behavior
+when calling `alpaway_real` directly, pass `--pause-offline-during-inference`.
+The option requires all four sources to be files; live and mixed sources are
+rejected. Without the option, live camera capture remains asynchronous.
+
+For each inference, `alpaway_real` prints `inference_ms` and per-camera
+`camera_capture_fps(input_window)` to standard error. The inference time is
+the wall time of `handleRequest`, excluding image preparation and display.
+The frame rates are estimated from host-received frame counts over the
+four-frame input window; they are not the inference rate or camera exposure
+rate. The existing JSON result is unchanged.
 
 The `--show` dashboard places the matched front-wide input on the left and
 large, wrapped model explanation text on the right, with acceleration and
@@ -287,6 +302,36 @@ scale on both axes. Positive curvature turns left. Speed is clamped at zero
 when braking, so reversing is not modeled. Labels show the supplied assumptions;
 they are not inferred from the example trajectory or measured from the video.
 These visualization arguments are also accepted by `alpaway_real` directly.
+
+To project this predicted path onto the front-wide image, supply a matching
+calibration file as well as `--show`, `--preview-speed-mps`, and `--preview-dt`:
+
+```bash
+./run_alpaway_smoke.bash --show --preview-speed-mps 8.66 --preview-dt 0.1 \
+  --preview-calibration /path/to/front-wide-calibration.json
+```
+
+Replace the path with a file for the selected camera and image resolution.
+The JSON must contain:
+
+| Field | Meaning |
+|---|---|
+| `image_size` | `[width, height]` in pixels, exactly matching the input frame. |
+| `intrinsic` | 3×3 OpenCV camera matrix `[[fx,0,cx],[0,fy,cy],[0,0,1]]`. |
+| `distortion_model` | `pinhole` (OpenCV Brown–Conrady) or `fisheye` (OpenCV fisheye). |
+| `distortion` | OpenCV coefficients: 4, 5, or 8 for `pinhole`; 4 for `fisheye`. |
+| `ego_to_camera_rotation` | 3×3 proper rotation matrix from ego coordinates to OpenCV camera coordinates. |
+| `ego_to_camera_translation_m` | Three-element translation in meters for the same transform. |
+| `ground_z_m` | Assumed ground height in meters in the ego coordinate frame. |
+
+Ego coordinates are forward, left, and up; OpenCV camera coordinates are right,
+down, and forward. The transform is `camera_point = rotation * ego_point +
+translation`. Each integrated path point is placed at `ground_z_m`; points
+behind the camera or outside the image are not drawn. The preview is only a
+visualization based on supplied speed, timestep, ground plane, and calibration.
+It is not a validated driving path. Without a calibration file, no path is
+projected onto the image. Verify calibration, distortion, coordinate frames,
+and timing against the exact camera before interpreting an overlay.
 
 ESC stops the display between inference calls. Inference itself is
 synchronous, so the GUI may pause while a request runs. For a finite

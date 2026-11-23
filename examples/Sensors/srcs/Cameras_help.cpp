@@ -13,17 +13,14 @@
  * limitations under the License.
  */
 #include "Cameras_help.hpp"
+#include "cameraSources.hpp"
 
 #include <algorithm>
 #include <array>
-#include <atomic>
-#include <cmath>
 #include <fstream>
 #include <mutex>
 #include <stdexcept>
-#include <thread>
 #include <nlohmann/json.hpp>
-#include <opencv2/videoio.hpp>
 
 namespace cameras
 {
@@ -50,16 +47,17 @@ std::vector<Frame> validateFrames(
     }
     return frames;
 }
-
-struct CameraState
-{
-    cv::VideoCapture capture;
-    std::mutex mutex;
-    Frame frame;
-    std::string error;
-    std::thread worker;
-};
 } // namespace
+
+std::optional<double> estimateCaptureFps(Frame const& first, Frame const& last)
+{
+    if (first.sequence == 0 || last.sequence <= first.sequence || last.received <= first.received)
+    {
+        return std::nullopt;
+    }
+    double const elapsed = std::chrono::duration<double>(last.received - first.received).count();
+    return static_cast<double>(last.sequence - first.sequence) / elapsed;
+}
 
 class FrameBuffer::Impl
 {
@@ -103,18 +101,13 @@ std::vector<Frame> FrameBuffer::snapshot(
 class CameraRig::Impl
 {
 public:
-    std::atomic<bool> stop{false};
-    std::vector<std::unique_ptr<CameraState>> cameras;
+    std::vector<std::unique_ptr<Camera>> cameras;
 
     ~Impl()
     {
-        stop = true;
-        for (auto& camera : cameras)
+        for (auto const& camera : cameras)
         {
-            if (camera->worker.joinable())
-            {
-                camera->worker.join();
-            }
+            camera->stop();
         }
     }
 };
@@ -140,103 +133,44 @@ CameraRig::CameraRig(std::string const& configPath)
         {
             throw std::runtime_error("Incorrect camera order; expected " + kROLES[i]);
         }
-        auto camera = std::make_unique<CameraState>();
-        auto const type = entry.at("type").get<std::string>();
-        bool opened = false;
-        if (type == "usb")
-        {
-            int const device = entry.at("device").get<int>();
-            if (device < 0)
-            {
-                throw std::runtime_error("Set a non-negative USB device for " + kROLES[i]);
-            }
-            opened = camera->capture.open(device, cv::CAP_V4L2);
-        }
-        else if (type == "rtsp" || type == "gstreamer" || type == "file")
-        {
-            auto const source = entry.at("source").get<std::string>();
-            if (source.empty())
-            {
-                throw std::runtime_error("Set a source for camera " + kROLES[i]);
-            }
-            int const backend = type == "gstreamer" ? cv::CAP_GSTREAMER : (type == "rtsp" ? cv::CAP_FFMPEG : cv::CAP_ANY);
-            if (type == "rtsp")
-            {
-                constexpr int kTIMEOUT_MS = 5000;
-                opened = camera->capture.open(source, backend,
-                    {cv::CAP_PROP_OPEN_TIMEOUT_MSEC, kTIMEOUT_MS, cv::CAP_PROP_READ_TIMEOUT_MSEC, kTIMEOUT_MS});
-            }
-            else
-            {
-                opened = camera->capture.open(source, backend);
-            }
-        }
-        else
-        {
-            throw std::runtime_error("Unsupported camera type: " + type);
-        }
-        if (!opened)
-        {
-            throw std::runtime_error("Cannot open camera " + kROLES[i]);
-        }
-        double const fps = camera->capture.get(cv::CAP_PROP_FPS);
-        if (type == "file" && (fps <= 0 || !std::isfinite(fps)))
-        {
-            throw std::runtime_error("Video file has invalid FPS: " + kROLES[i]);
-        }
-        mImpl->cameras.push_back(std::move(camera));
+        mImpl->cameras.push_back(makeCamera(entry, kROLES[i]));
     }
-    for (size_t i = 0; i < mImpl->cameras.size(); ++i)
+    for (auto const& camera : mImpl->cameras)
     {
-        auto* camera = mImpl->cameras[i].get();
-        bool const isFile = entries.at(i).at("type") == "file";
-        double const fps = camera->capture.get(cv::CAP_PROP_FPS);
-        camera->worker = std::thread([this, camera, isFile, fps]() {
-            try
-            {
-                auto next = std::chrono::steady_clock::now();
-                while (!mImpl->stop)
-                {
-                    if (isFile)
-                    {
-                        std::this_thread::sleep_until(next);
-                        next += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                            std::chrono::duration<double>(1.0 / fps));
-                    }
-                    cv::Mat image;
-                    if (!camera->capture.read(image) || image.empty())
-                    {
-                        throw std::runtime_error("Camera stream ended or read failed");
-                    }
-                    std::lock_guard<std::mutex> lock(camera->mutex);
-                    camera->frame.image = std::move(image);
-                    camera->frame.received = std::chrono::steady_clock::now();
-                    ++camera->frame.sequence;
-                }
-            }
-            catch (std::exception const& error)
-            {
-                std::lock_guard<std::mutex> lock(camera->mutex);
-                camera->error = error.what();
-            }
-        });
+        camera->start();
     }
 }
 
 CameraRig::~CameraRig() = default;
+
+void CameraRig::setOfflinePlaybackPaused(bool paused)
+{
+    for (auto const& camera : mImpl->cameras)
+    {
+        if (!camera->isOffline())
+        {
+            throw std::invalid_argument("Offline playback pause requires all cameras to use file sources");
+        }
+    }
+    for (auto const& camera : mImpl->cameras)
+    {
+        camera->setPaused(paused);
+    }
+    if (paused)
+    {
+        for (auto const& camera : mImpl->cameras)
+        {
+            camera->waitUntilPaused();
+        }
+    }
+}
 
 std::vector<Frame> CameraRig::snapshot(std::chrono::milliseconds maxAge, std::chrono::milliseconds maxSkew) const
 {
     std::vector<Frame> frames;
     for (size_t i = 0; i < mImpl->cameras.size(); ++i)
     {
-        auto& camera = *mImpl->cameras[i];
-        std::lock_guard<std::mutex> lock(camera.mutex);
-        if (!camera.error.empty())
-        {
-            throw std::runtime_error(kROLES[i] + ": " + camera.error);
-        }
-        frames.push_back(camera.frame);
+        frames.push_back(mImpl->cameras[i]->latestFrame(kROLES[i]));
     }
     return validateFrames(std::move(frames), maxAge, maxSkew);
 }

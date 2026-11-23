@@ -18,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <iomanip>
+#include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <regex>
 #include <sstream>
@@ -44,6 +45,100 @@ void validatePreview(TrajectoryPreview const& preview)
         || !std::isfinite(preview.timeStepSeconds) || preview.timeStepSeconds <= 0)
     {
         throw std::invalid_argument("Trajectory preview requires speed >= 0 and dt > 0, both finite");
+    }
+}
+
+void validateCalibration(CameraCalibration const& calibration, cv::Size const& imageSize)
+{
+    auto const& k = calibration.intrinsic;
+    auto const& r = calibration.egoToCameraRotation;
+    for (double value : k.val)
+    {
+        if (!std::isfinite(value))
+        {
+            throw std::invalid_argument("Camera intrinsics must be finite");
+        }
+    }
+    for (double value : r.val)
+    {
+        if (!std::isfinite(value))
+        {
+            throw std::invalid_argument("Camera rotation must be finite");
+        }
+    }
+    for (double value : calibration.egoToCameraTranslation.val)
+    {
+        if (!std::isfinite(value))
+        {
+            throw std::invalid_argument("Camera translation must be finite");
+        }
+    }
+    for (double value : calibration.distortion)
+    {
+        if (!std::isfinite(value))
+        {
+            throw std::invalid_argument("Camera distortion must be finite");
+        }
+    }
+    auto const size = calibration.distortion.size();
+    bool const validDistortion = calibration.fisheye ? size == 4 : (size == 4 || size == 5 || size == 8);
+    if (calibration.imageSize != imageSize || imageSize.width <= 0 || imageSize.height <= 0 || k(0, 0) <= 0
+        || k(1, 1) <= 0 || k(0, 1) != 0 || k(1, 0) != 0 || k(2, 0) != 0 || k(2, 1) != 0 || k(2, 2) != 1
+        || !validDistortion || !std::isfinite(calibration.groundZMeters))
+    {
+        throw std::invalid_argument("Invalid camera calibration or frame resolution");
+    }
+    if (cv::norm(cv::Mat(r * r.t() - cv::Matx33d::eye())) > 1.0e-5
+        || std::abs(cv::determinant(cv::Mat(r)) - 1) > 1.0e-5)
+    {
+        throw std::invalid_argument("Camera rotation must be a proper orthonormal rotation");
+    }
+}
+
+void drawProjectedTrajectory(cv::Mat& frame, std::vector<cv::Point2d> const& points,
+    CameraCalibration const& calibration)
+{
+    validateCalibration(calibration, frame.size());
+    std::optional<cv::Point> previous;
+    for (auto const& point : points)
+    {
+        cv::Vec3d const cameraPoint = calibration.egoToCameraRotation
+                * cv::Vec3d(point.x, point.y, calibration.groundZMeters)
+            + calibration.egoToCameraTranslation;
+        if (!std::isfinite(cameraPoint[0]) || !std::isfinite(cameraPoint[1]) || !std::isfinite(cameraPoint[2]))
+        {
+            throw std::invalid_argument("Camera projection overflowed");
+        }
+        if (cameraPoint[2] <= 0)
+        {
+            previous.reset();
+            continue;
+        }
+        std::vector<cv::Point3d> const objectPoints{{cameraPoint[0], cameraPoint[1], cameraPoint[2]}};
+        std::vector<cv::Point2d> pixels;
+        if (calibration.fisheye)
+        {
+            cv::fisheye::projectPoints(objectPoints, pixels, cv::Vec3d{}, cv::Vec3d{}, calibration.intrinsic,
+                calibration.distortion);
+        }
+        else
+        {
+            cv::projectPoints(
+                objectPoints, cv::Vec3d{}, cv::Vec3d{}, calibration.intrinsic, calibration.distortion, pixels);
+        }
+        auto const& pixel = pixels.front();
+        if (!std::isfinite(pixel.x) || !std::isfinite(pixel.y) || pixel.x < 0 || pixel.y < 0
+            || pixel.x >= frame.cols || pixel.y >= frame.rows)
+        {
+            previous.reset();
+            continue;
+        }
+        cv::Point const current(cvRound(pixel.x), cvRound(pixel.y));
+        if (previous)
+        {
+            cv::line(frame, *previous, current, cv::Scalar(0, 255, 0), 3, cv::LINE_AA);
+        }
+        previous = current;
     }
 }
 
@@ -236,7 +331,8 @@ void Render::drawText(
 }
 
 cv::Mat Render::dashboard(cv::Mat const& frame, std::string const& explanation,
-    std::vector<std::pair<float, float>> const& actions, std::optional<TrajectoryPreview> const& preview)
+    std::vector<std::pair<float, float>> const& actions, std::optional<TrajectoryPreview> const& preview,
+    std::optional<CameraCalibration> const& calibration)
 {
     if (frame.empty() || frame.type() != CV_8UC3)
     {
@@ -251,12 +347,24 @@ cv::Mat Render::dashboard(cv::Mat const& frame, std::string const& explanation,
     cv::rectangle(canvas, {970, 15, 615, 870}, cv::Scalar(37, 40, 49), cv::FILLED);
     drawText(canvas, {20, 42}, "ALPAMAYO | FRONT WIDE", CYAN, FONT_HERSHEY_SIMPLEX, 1.0, 2);
     double const scale = std::min(920.0 / frame.cols, 518.0 / frame.rows);
+    cv::Mat displayed = frame;
+    if (calibration)
+    {
+        validateCalibration(*calibration, frame.size());
+        if (preview && !actions.empty())
+        {
+            displayed = frame.clone();
+            drawProjectedTrajectory(displayed, integrateTrajectory(actions, *preview), *calibration);
+        }
+    }
     cv::Mat resized;
-    cv::resize(frame, resized, {}, scale, scale);
+    cv::resize(displayed, resized, {}, scale, scale);
     resized.copyTo(
         canvas(cv::Rect(20 + (920 - resized.cols) / 2, 65 + (518 - resized.rows) / 2, resized.cols, resized.rows)));
-    drawText(canvas, {20, 615}, "Matched input frame | Model output is NOT a control command", YELLOW,
-        FONT_HERSHEY_SIMPLEX, 0.65, 2);
+    drawText(canvas, {20, 615},
+        calibration && preview && !actions.empty() ? "Projected preview | NOT a validated driving path"
+                                                   : "Matched input frame | Model output is NOT a control command",
+        YELLOW, FONT_HERSHEY_SIMPLEX, 0.65, 2);
     drawActionPlot(*this, canvas, {20, 640, 430, 225}, actions, false);
     drawActionPlot(*this, canvas, {500, 640, 430, 225}, actions, true);
     drawText(canvas, {990, 48}, "MODEL EXPLANATION", YELLOW, FONT_HERSHEY_SIMPLEX, 0.9, 2);
@@ -336,8 +444,9 @@ cv::Mat Render::dashboard(cv::Mat const& frame, std::string const& explanation,
         YELLOW, FONT_HERSHEY_SIMPLEX, 0.6, 1);
     drawText(canvas, {990, 825}, "Forward: up | Left: left | Span: " + number(maxX - minX) + " m", CYAN,
         FONT_HERSHEY_SIMPLEX, 0.55, 1);
-    drawText(canvas, {990, 860}, "No camera projection. Not a validated driving path.", YELLOW, FONT_HERSHEY_SIMPLEX,
-        0.55, 1);
+    drawText(canvas, {990, 860}, calibration ? "Projection uses supplied calibration; not validated."
+                                             : "No camera projection. Not a validated driving path.",
+        YELLOW, FONT_HERSHEY_SIMPLEX, 0.55, 1);
     return canvas;
 }
 } // namespace Alpaway

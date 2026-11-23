@@ -17,10 +17,133 @@
 
 #include <chrono>
 #include <cstdio>
+#include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 #include <unistd.h>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
+#include <opencv2/videoio.hpp>
+
+namespace
+{
+struct TemporaryCameraFiles
+{
+    std::string directory;
+    std::string video;
+    std::string config;
+
+    ~TemporaryCameraFiles()
+    {
+        std::remove(video.c_str());
+        std::remove(config.c_str());
+        rmdir(directory.c_str());
+    }
+};
+
+nlohmann::json cameraConfig(std::string const& type, std::string const& source)
+{
+    nlohmann::json entries = nlohmann::json::array();
+    for (auto const* role : {"front_wide", "front_tele", "cross_left", "cross_right"})
+    {
+        entries.push_back({{"role", role}, {"type", type}, {"source", source}});
+    }
+    return {{"stream_cameras", entries}};
+}
+} // namespace
+
+//! Capture FPS accounts for frames between snapshots and rejects invalid intervals.
+TEST(FrameRateTest, EstimatesCapturedFramesBetweenSnapshots)
+{
+    cameras::Frame first;
+    first.sequence = 5;
+    first.received = std::chrono::steady_clock::now();
+    cameras::Frame last;
+    last.sequence = 35;
+    last.received = first.received + std::chrono::milliseconds(1500);
+    auto const fps = cameras::estimateCaptureFps(first, last);
+    ASSERT_TRUE(fps.has_value());
+    EXPECT_DOUBLE_EQ(*fps, 20.0);
+    last.sequence = first.sequence;
+    EXPECT_FALSE(cameras::estimateCaptureFps(first, last).has_value());
+    last.sequence = first.sequence + 1;
+    last.received = first.received;
+    EXPECT_FALSE(cameras::estimateCaptureFps(first, last).has_value());
+}
+
+//! Offline sources pause together during inference and resume before end of stream.
+TEST(CameraRigTest, PausesAndResumesOfflineVideo)
+{
+    char directory[] = "/tmp/alpaway-camera-test-XXXXXX";
+    ASSERT_NE(mkdtemp(directory), nullptr);
+    TemporaryCameraFiles files{
+        directory, std::string(directory) + "/video.avi", std::string(directory) + "/config.json"};
+    cv::VideoWriter writer(files.video, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 10.0, cv::Size(32, 32));
+    ASSERT_TRUE(writer.isOpened());
+    for (int i = 0; i < 20; ++i)
+    {
+        writer.write(cv::Mat(32, 32, CV_8UC3, cv::Scalar(i, i, i)));
+    }
+    writer.release();
+    {
+        std::ofstream config(files.config);
+        ASSERT_TRUE(config.is_open());
+        config << cameraConfig("file", files.video);
+    }
+    cameras::CameraRig rig(files.config);
+    auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    std::vector<cameras::Frame> frames;
+    while (frames.empty() && std::chrono::steady_clock::now() < deadline)
+    {
+        frames = rig.snapshot(std::chrono::seconds(1), std::chrono::seconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(frames.size(), size_t{4});
+    auto const firstSequence = frames[0].sequence;
+    auto const updateDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (frames[0].sequence == firstSequence && std::chrono::steady_clock::now() < updateDeadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        frames = rig.snapshot(std::chrono::seconds(1), std::chrono::seconds(1));
+        ASSERT_EQ(frames.size(), size_t{4});
+    }
+    ASSERT_GT(frames[0].sequence, firstSequence);
+    rig.setOfflinePlaybackPaused(true);
+    auto const pausedFrames = rig.snapshot(std::chrono::seconds(2), std::chrono::seconds(2));
+    ASSERT_EQ(pausedFrames.size(), size_t{4});
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    auto const stillPaused = rig.snapshot(std::chrono::seconds(2), std::chrono::seconds(2));
+    ASSERT_EQ(stillPaused.size(), size_t{4});
+    for (size_t i = 0; i < pausedFrames.size(); ++i)
+    {
+        EXPECT_EQ(stillPaused[i].sequence, pausedFrames[i].sequence);
+    }
+    rig.setOfflinePlaybackPaused(false);
+    auto const resumeDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    auto resumed = stillPaused;
+    while (resumed[0].sequence == stillPaused[0].sequence && std::chrono::steady_clock::now() < resumeDeadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        resumed = rig.snapshot(std::chrono::seconds(2), std::chrono::seconds(2));
+        ASSERT_EQ(resumed.size(), size_t{4});
+    }
+    EXPECT_GT(resumed[0].sequence, stillPaused[0].sequence);
+    bool ended = false;
+    while (!ended && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        try
+        {
+            rig.snapshot(std::chrono::seconds(1), std::chrono::seconds(1));
+        }
+        catch (std::runtime_error const&)
+        {
+            ended = true;
+        }
+    }
+    EXPECT_TRUE(ended);
+}
 
 TEST(FrameBufferTest, CopiesFramesAndRejectsStaleOrSkewedSets)
 {
@@ -33,7 +156,7 @@ TEST(FrameBufferTest, CopiesFramesAndRejectsStaleOrSkewedSets)
     }
     image.setTo(cv::Scalar(0, 0, 0));
     auto frames = source.snapshot(std::chrono::seconds(1), std::chrono::milliseconds(10));
-    ASSERT_EQ(frames.size(), 4);
+    ASSERT_EQ(frames.size(), size_t{4});
     EXPECT_EQ(frames[0].image.at<cv::Vec3b>(0, 0)[0], 1);
     EXPECT_TRUE(source.snapshot(std::chrono::milliseconds(0), std::chrono::seconds(1)).empty());
     source.publish(0, image, now + std::chrono::milliseconds(20));

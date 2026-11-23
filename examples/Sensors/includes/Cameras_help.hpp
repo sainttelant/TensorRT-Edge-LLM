@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <opencv2/core.hpp>
@@ -31,6 +32,9 @@ struct Frame
     std::chrono::steady_clock::time_point received;
     uint64_t sequence{};
 };
+
+//! Estimate host-received frames per second between two snapshots of the same source.
+std::optional<double> estimateCaptureFps(Frame const& first, Frame const& last);
 
 //! Supply four frames in front-wide, front-tele, cross-left, cross-right order.
 class FrameSource
@@ -73,6 +77,9 @@ public:
     //! Returns frames in model camera order, rejecting stale or skewed frames.
     std::vector<Frame> snapshot(
         std::chrono::milliseconds maxAge, std::chrono::milliseconds maxSkew) const override;
+
+    //! Pause or resume playback only when every source is an offline video file.
+    void setOfflinePlaybackPaused(bool paused);
 
 private:
     class Impl;

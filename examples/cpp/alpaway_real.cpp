@@ -20,17 +20,21 @@
 #include "runtime/llmRuntimeUtils.h"
 #include "vehicle_control.hpp"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <getopt.h>
+#include <iomanip>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
@@ -46,8 +50,10 @@ struct Args
     std::string engineDir;
     std::string multimodalDir;
     std::string checkpointDir;
+    std::string calibrationFile;
     int maxWindows{0};
     bool show{false};
+    bool pauseOfflineDuringInference{false};
     std::optional<Alpaway::TrajectoryPreview> preview;
 };
 
@@ -56,7 +62,8 @@ void usage(char const* name)
     std::cerr << "Usage: " << name
               << " --camera-config PATH --trajectory-file PATH --engine-dir PATH --multimodal-engine-dir PATH"
                  " [--checkpoint-dir PATH] [--max-windows N] [--show]"
-                 " [--preview-speed-mps VALUE --preview-dt SECONDS]\n";
+                 " [--preview-speed-mps VALUE --preview-dt SECONDS] [--preview-calibration PATH]"
+                 " [--pause-offline-during-inference]\n";
 }
 
 double parseNumber(char const* input)
@@ -81,6 +88,8 @@ Args parseArgs(int argc, char** argv)
         {"multimodal-engine-dir", required_argument, nullptr, 'm'}, {"checkpoint-dir", required_argument, nullptr, 'p'},
         {"max-windows", required_argument, nullptr, 'n'}, {"show", no_argument, nullptr, 's'},
         {"preview-speed-mps", required_argument, nullptr, 'v'}, {"preview-dt", required_argument, nullptr, 'd'},
+        {"preview-calibration", required_argument, nullptr, 'C'},
+        {"pause-offline-during-inference", no_argument, nullptr, 'P'},
         {"help", no_argument, nullptr, 'h'}, {nullptr, 0, nullptr, 0}};
     int opt;
     while ((opt = getopt_long(argc, argv, "", options, nullptr)) != -1)
@@ -104,8 +113,16 @@ Args parseArgs(int argc, char** argv)
             break;
         }
         case 's': args.show = true; break;
+        case 'P': args.pauseOfflineDuringInference = true; break;
         case 'v': previewSpeed = parseNumber(optarg); break;
         case 'd': previewDt = parseNumber(optarg); break;
+        case 'C':
+            args.calibrationFile = optarg;
+            if (args.calibrationFile.empty())
+            {
+                throw std::invalid_argument("--preview-calibration requires a nonempty path");
+            }
+            break;
         case 'h': usage(argv[0]); std::exit(EXIT_SUCCESS);
         default: throw std::invalid_argument("Invalid command line option");
         }
@@ -123,7 +140,54 @@ Args parseArgs(int argc, char** argv)
     {
         args.preview = Alpaway::TrajectoryPreview{*previewSpeed, *previewDt};
     }
+    if (!args.calibrationFile.empty() && (!args.show || !args.preview))
+    {
+        throw std::invalid_argument("--preview-calibration requires --show, --preview-speed-mps and --preview-dt");
+    }
     return args;
+}
+
+Alpaway::CameraCalibration loadCalibration(std::string const& path)
+{
+    std::ifstream input(path);
+    if (!input)
+    {
+        throw std::runtime_error("Cannot open camera calibration: " + path);
+    }
+    auto const json = nlohmann::json::parse(input);
+    auto checkArray = [](nlohmann::json const& value, size_t size, std::string const& name) {
+        if (!value.is_array() || value.size() != size)
+        {
+            throw std::invalid_argument(name + " has an invalid shape");
+        }
+    };
+    checkArray(json.at("image_size"), 2, "image_size");
+    checkArray(json.at("ego_to_camera_translation_m"), 3, "ego_to_camera_translation_m");
+    for (auto const* name : {"intrinsic", "ego_to_camera_rotation"})
+    {
+        auto const& value = json.at(name);
+        checkArray(value, 3, name);
+        for (auto const& row : value)
+        {
+            checkArray(row, 3, name);
+        }
+    }
+    auto const imageSize = json.at("image_size").get<std::array<int, 2>>();
+    auto const intrinsic = json.at("intrinsic").get<std::array<std::array<double, 3>, 3>>();
+    auto const rotation = json.at("ego_to_camera_rotation").get<std::array<std::array<double, 3>, 3>>();
+    auto const translation = json.at("ego_to_camera_translation_m").get<std::array<double, 3>>();
+    auto const model = json.at("distortion_model").get<std::string>();
+    if (model != "pinhole" && model != "fisheye")
+    {
+        throw std::invalid_argument("distortion_model must be 'pinhole' or 'fisheye'");
+    }
+    auto matrix = [](std::array<std::array<double, 3>, 3> const& values) {
+        return cv::Matx33d(values[0][0], values[0][1], values[0][2], values[1][0], values[1][1], values[1][2],
+            values[2][0], values[2][1], values[2][2]);
+    };
+    return {{imageSize[0], imageSize[1]}, matrix(intrinsic), matrix(rotation),
+        {translation[0], translation[1], translation[2]}, json.at("distortion").get<std::vector<double>>(),
+        model == "fisheye", json.at("ground_z_m").get<double>()};
 }
 
 rt::imageUtils::ImageData makeImage(cv::Mat const& bgr)
@@ -181,6 +245,11 @@ int main(int argc, char** argv)
     try
     {
         auto const args = parseArgs(argc, argv);
+        std::optional<Alpaway::CameraCalibration> calibration;
+        if (!args.calibrationFile.empty())
+        {
+            calibration = loadCalibration(args.calibrationFile);
+        }
         auto plugin = trt_edgellm::loadEdgellmPluginLib();
         if (!plugin)
         {
@@ -217,6 +286,12 @@ int main(int argc, char** argv)
         cv::Mat display;
         bool haveResult = false;
         std::string const windowName = "Alpamayo | input, explanation and trajectory";
+
+        if (args.show)
+        {
+            cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+            cv::resizeWindow(windowName, 1920, 1080);
+        }
         while (args.maxWindows == 0 || completed < args.maxWindows)
         {
             if (args.show && !display.empty() && cv::waitKey(1) == 27)
@@ -269,13 +344,17 @@ int main(int argc, char** argv)
             history.push_back(std::move(frames));
             if (args.show && !haveResult)
             {
-                display = renderer.dashboard(
-                    history.back().front().image, "Collecting four camera timestamps...", {}, args.preview);
+                display = renderer.dashboard(history.back().front().image, "Collecting four camera timestamps...", {},
+                    args.preview, calibration);
                 cv::imshow(windowName, display);
             }
             if (history.size() != 4)
             {
                 continue;
+            }
+            if (args.pauseOfflineDuringInference)
+            {
+                rig.setOfflinePlaybackPaused(true);
             }
             vehicle::TrajectoryHistory trajectory;
             trajectory.loadJson(args.trajectoryFile);
@@ -293,14 +372,37 @@ int main(int argc, char** argv)
             if (args.show)
             {
                 display = renderer.dashboard(
-                    history.back().front().image, "Inference running. Waiting for model output...", {}, args.preview);
+                    history.back().front().image, "Inference running. Waiting for model output...", {}, args.preview,
+                    calibration);
                 cv::imshow(windowName, display);
                 if (cv::waitKey(1) == 27)
                 {
                     break;
                 }
             }
-            if (!runtime.handleRequest(request, response, stream) || response.outputTexts.size() != 1
+            auto const inferenceStart = std::chrono::steady_clock::now();
+            bool const inferenceSucceeded = runtime.handleRequest(request, response, stream);
+            auto const inferenceEnd = std::chrono::steady_clock::now();
+            constexpr std::array<char const*, 4> kCAMERA_ROLES{"front_wide", "front_tele", "cross_left", "cross_right"};
+            std::ostringstream performance;
+            performance << std::fixed << std::setprecision(2) << "inference_ms="
+                        << std::chrono::duration<double, std::milli>(inferenceEnd - inferenceStart).count()
+                        << " camera_capture_fps(input_window)";
+            for (size_t i = 0; i < kCAMERA_ROLES.size(); ++i)
+            {
+                performance << " " << kCAMERA_ROLES[i] << "=";
+                auto const fps = cameras::estimateCaptureFps(history.front()[i], history.back()[i]);
+                if (fps)
+                {
+                    performance << *fps;
+                }
+                else
+                {
+                    performance << "unavailable";
+                }
+            }
+            std::cerr << performance.str() << '\n';
+            if (!inferenceSucceeded || response.outputTexts.size() != 1
                 || response.outputTrajectories.size() != 1 || response.outputTrajectories[0].empty())
             {
                 throw std::runtime_error("Alpamayo inference failed or returned no action trajectory");
@@ -321,7 +423,7 @@ int main(int argc, char** argv)
             if (args.show)
             {
                 display = renderer.dashboard(history.back().front().image, response.outputTexts[0],
-                    response.outputTrajectories[0], args.preview);
+                    response.outputTrajectories[0], args.preview, calibration);
                 haveResult = true;
                 bool const finalWindow = args.maxWindows > 0 && completed >= args.maxWindows;
                 if (finalWindow)
@@ -329,11 +431,20 @@ int main(int argc, char** argv)
                     renderer.drawText(display, {35, 92}, "Result ready - press any key to exit", Alpaway::YELLOW,
                         Alpaway::FONT_HERSHEY_SIMPLEX, 0.75, 2);
                 }
+                else if (args.pauseOfflineDuringInference)
+                {
+                    renderer.drawText(display, {35, 92}, "Press any key for next result; ESC to exit", Alpaway::YELLOW,
+                        Alpaway::FONT_HERSHEY_SIMPLEX, 0.75, 2);
+                }
                 cv::imshow(windowName, display);
-                if (cv::waitKey(finalWindow ? 0 : 1) == 27)
+                if (cv::waitKey(finalWindow || args.pauseOfflineDuringInference ? 0 : 1) == 27)
                 {
                     break;
                 }
+            }
+            if (args.pauseOfflineDuringInference)
+            {
+                rig.setOfflinePlaybackPaused(false);
             }
             history.clear();
             nextSample = std::chrono::steady_clock::now();

@@ -40,7 +40,7 @@ if(NOT WIN32)
 
   option(BUILD_ALPAWAY_REAL "Build the OpenCV live-camera Alpamayo example" OFF)
   if(BUILD_ALPAWAY_REAL)
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio highgui)
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio highgui calib3d)
     add_library(
       alpawayRender STATIC
       ${CMAKE_SOURCE_DIR}/examples/utils/renders/Render.cpp)
@@ -51,6 +51,8 @@ if(NOT WIN32)
     add_executable(
       alpaway_real alpaway_real.cpp
       ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/Cameras_help.cpp
+      ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/camera.cpp
+      ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/cameraSources.cpp
       ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/vehicle_control.cpp)
     target_include_directories(
       alpaway_real PRIVATE ${COMMON_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS}
@@ -64,6 +66,8 @@ if(NOT WIN32)
         ${CMAKE_SOURCE_DIR}/examples/Sensors/tests/sensorTests.cpp
         ${CMAKE_SOURCE_DIR}/examples/utils/renders/tests/renderTests.cpp
         ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/Cameras_help.cpp
+        ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/camera.cpp
+        ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/cameraSources.cpp
         ${CMAKE_SOURCE_DIR}/examples/Sensors/srcs/vehicle_control.cpp)
       target_include_directories(
         alpaway_sensor_tests

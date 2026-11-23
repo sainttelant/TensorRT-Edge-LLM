@@ -3,22 +3,22 @@
     {
       "role": "front_wide",
       "type": "file",
-      "source": "datasets/data/5e9a00f1-f575-43c8-a4e2-62e52a651dbb.camera_front_wide_120fov.mp4"
+      "source": "datasets/data/2a48843a-2eed-4c21-94c2-1de716605b7d.camera_front_wide_120fov.mp4"
     },
     {
       "role": "front_tele",
       "type": "file",
-      "source": "datasets/data/5e9a00f1-f575-43c8-a4e2-62e52a651dbb.camera_front_tele_30fov.mp4"
+      "source": "datasets/data/2a48843a-2eed-4c21-94c2-1de716605b7d.camera_front_tele_30fov.mp4"
     },
     {
       "role": "cross_left",
       "type": "file",
-      "source": "datasets/data/5e9a00f1-f575-43c8-a4e2-62e52a651dbb.camera_cross_left_120fov.mp4"
+      "source": "datasets/data/2a48843a-2eed-4c21-94c2-1de716605b7d.camera_cross_left_120fov.mp4"
     },
     {
       "role": "cross_right",
       "type": "file",
-      "source": "datasets/data/5e9a00f1-f575-43c8-a4e2-62e52a651dbb.camera_cross_right_120fov.mp4"
+      "source": "datasets/data/2a48843a-2eed-4c21-94c2-1de716605b7d.camera_cross_right_120fov.mp4"
     }
   ]
 }

@@ -74,3 +74,34 @@ TEST(RenderDashboardTest, RequiresAssumptionsForBevAndPreservesInput)
     EXPECT_NO_THROW(render.dashboard(frame, "<i1495><|im_end|>", {}));
     EXPECT_THROW(render.dashboard(cv::Mat{}, "test", {}), std::invalid_argument);
 }
+
+//! A calibrated future path is projected onto the matching input image.
+TEST(RenderDashboardTest, ProjectsFuturePathOnlyWithValidCalibration)
+{
+    Alpaway::Render render;
+    cv::Mat const frame(90, 160, CV_8UC3, cv::Scalar(40, 50, 60));
+    auto const original = frame.clone();
+    std::vector<std::pair<float, float>> const actions(20, {0.0F, 0.0F});
+    Alpaway::CameraCalibration calibration{{160, 90}, {50, 0, 80, 0, 50, 40, 0, 0, 1},
+        {0, -1, 0, 0, 0, -1, 1, 0, 0}, {0, 1.5, 0}, {0, 0, 0, 0}, false, 0};
+    Alpaway::TrajectoryPreview const preview{10.0, 0.1};
+    auto const without = render.dashboard(frame, "", actions, preview);
+    auto const with = render.dashboard(frame, "", actions, preview, calibration);
+    cv::Rect const expectedPath(475, 360, 12, 45);
+    cv::Mat green;
+    cv::inRange(with(expectedPath), cv::Scalar(0, 200, 0), cv::Scalar(80, 255, 80), green);
+    EXPECT_GT(cv::countNonZero(green), 0);
+    cv::inRange(without(expectedPath), cv::Scalar(0, 200, 0), cv::Scalar(80, 255, 80), green);
+    EXPECT_EQ(cv::countNonZero(green), 0);
+    EXPECT_EQ(cv::norm(frame, original, cv::NORM_INF), 0);
+    auto const leftTurn = render.dashboard(
+        frame, "", std::vector<std::pair<float, float>>(6, {0.0F, 0.1F}), preview, calibration);
+    cv::inRange(leftTurn(cv::Rect(410, 395, 35, 40)), cv::Scalar(0, 200, 0), cv::Scalar(80, 255, 80), green);
+    EXPECT_GT(cv::countNonZero(green), 0);
+    calibration.fisheye = true;
+    auto const fisheye = render.dashboard(frame, "", actions, preview, calibration);
+    cv::Rect const cameraImage(20, 65, 920, 518);
+    EXPECT_GT(cv::norm(with(cameraImage), fisheye(cameraImage), cv::NORM_INF), 0);
+    calibration.imageSize.width = 100;
+    EXPECT_THROW(render.dashboard(frame, "", actions, preview, calibration), std::invalid_argument);
+}

@@ -31,7 +31,7 @@ PREVIEW_ARGS=()
 usage() {
     cat <<'EOF'
 Usage: ./run_alpaway_smoke.bash [--show] [--max-windows N]
-       [--preview-speed-mps VALUE --preview-dt SECONDS] [--help]
+       [--preview-speed-mps VALUE --preview-dt SECONDS] [--preview-calibration PATH] [--help]
 
 Run local video smoke inference with an automatically refreshed EXAMPLE history.
 This script is NOT for live cameras or vehicle control.
@@ -58,7 +58,7 @@ while (($#)); do
     case "$1" in
         --help|-h) usage; exit 0 ;;
         --show) SHOW_ARGS=(--show) ;;
-        --preview-speed-mps|--preview-dt)
+        --preview-speed-mps|--preview-dt|--preview-calibration)
             (($# >= 2)) || fail "$1 requires a value."
             PREVIEW_ARGS+=("$1" "$2")
             shift
@@ -165,6 +165,7 @@ done
     --engine-dir "$LLM_ENGINE_DIR" \
     --multimodal-engine-dir "$MULTIMODAL_ENGINE_DIR" \
     --max-windows "$MAX_WINDOWS" \
+    --pause-offline-during-inference \
     "${SHOW_ARGS[@]}" "${PREVIEW_ARGS[@]}" &
 INFERENCE_PID=$!
 while kill -0 "$INFERENCE_PID" 2>/dev/null; do
