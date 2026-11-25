@@ -29,6 +29,7 @@ CUDA_DIR="${CUDA_DIR:-$(readlink -f /usr/local/cuda)}"
 BUILD_JOBS="${BUILD_JOBS:-$(nproc)}"
 INPUT_FILE="${INPUT_FILE:-${MODEL_ROOT}/input_action.json}"
 OUTPUT_FILE="${OUTPUT_FILE:-${MODEL_ROOT}/output_action.json}"
+ACTION_WEIGHTS_FILE="${ACTION_WEIGHTS_FILE:-model.onnx.data}"
 RUN_INFERENCE=0
 BUILD_ONLY=0
 CHECK_ONLY=0
@@ -44,7 +45,9 @@ Set MODEL_ROOT, ONNX_DIR, ENGINE_DIR, BUILD_DIR,
 TRT_PACKAGE_DIR, CUDA_DIR, or BUILD_JOBS to override the defaults.
 Programs are under BUILD_DIR/bin and the plugin is under BUILD_DIR/lib.
 ONNX_DIR defaults to MODEL_ROOT/onnx. For --quantinize, set ONNX_DIR to
-the quantized export directory. No separate --int8 builder option is needed.
+the quantized export directory. ACTION_WEIGHTS_FILE selects the action ONNX
+external weights filename (defaults to model.onnx.data).
+No separate --int8 builder option is needed.
 
 Options:
   --check-only  Check prerequisites for the selected mode without running.
@@ -120,9 +123,17 @@ for component in llm visual action; do
     MISSING_COMPONENTS+=("$component")
     component_dir="${ONNX_DIR}/${component}"
     [[ -s "${component_dir}/model.onnx" ]] || fail "Missing ONNX graph: ${component_dir}/model.onnx"
-    [[ -s "${component_dir}/model.onnx.data" ]] || fail "Missing ONNX external weights: ${component_dir}/model.onnx.data"
+    if [[ "$component" == "action" ]]; then
+        [[ -s "${component_dir}/${ACTION_WEIGHTS_FILE}" ]] \
+            || fail "Missing action ONNX external weights: ${component_dir}/${ACTION_WEIGHTS_FILE}"
+    else
+        [[ -s "${component_dir}/model.onnx.data" ]] \
+            || fail "Missing ONNX external weights: ${component_dir}/model.onnx.data"
+    fi
     [[ -s "${component_dir}/config.json" ]] || fail "Missing component config: ${component_dir}/config.json"
-    if [[ ! -x "${BIN_DIR}/${component}_build" ]]; then
+    if [[ ! -x "${BIN_DIR}/${component}_build" ]] \
+        || [[ "$component" == "action" && ( "${REPO_DIR}/cpp/builder/actionBuilder.cpp" -nt "${BIN_DIR}/action_build" \
+            || "${REPO_DIR}/cpp/builder/actionBuilder.h" -nt "${BIN_DIR}/action_build" ) ]]; then
         BUILD_TARGETS+=("${component}_build")
     fi
 done

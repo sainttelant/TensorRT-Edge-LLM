@@ -268,13 +268,12 @@ engine/build directories. Relative paths are resolved from the repository
 root. The local dataset, template and engines must already exist; the wrapper
 does not export models or build engines.
 
-The wrapper pauses all four offline videos while each inference request runs.
-With `--show`, playback remains paused at each result; press a key to resume
-or ESC to exit. Without `--show`, playback resumes after inference. Between
-requests, videos play at their original frame rate. To use the same behavior
-when calling `alpaway_real` directly, pass `--pause-offline-during-inference`.
-The option requires all four sources to be files; live and mixed sources are
-rejected. Without the option, live camera capture remains asynchronous.
+Both the wrapper and `alpaway_real` pause offline video sources during each
+inference request. Without `--show`, playback resumes when inference completes.
+With `--show`, offline playback stays paused while the result is displayed;
+press a key to continue, or ESC to exit. For the final result, a key exits.
+Live sources continue capturing asynchronously, including in mixed-source
+configurations. Between requests, videos play at their original frame rate.
 
 For each inference, `alpaway_real` prints `inference_ms` and per-camera
 `camera_capture_fps(input_window)` to standard error. The inference time is

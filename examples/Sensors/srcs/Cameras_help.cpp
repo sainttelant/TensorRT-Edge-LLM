@@ -143,24 +143,30 @@ CameraRig::CameraRig(std::string const& configPath)
 
 CameraRig::~CameraRig() = default;
 
+bool CameraRig::hasOfflineSources() const
+{
+    return std::any_of(mImpl->cameras.begin(), mImpl->cameras.end(), [](auto const& camera) {
+        return camera->isOffline();
+    });
+}
+
 void CameraRig::setOfflinePlaybackPaused(bool paused)
 {
     for (auto const& camera : mImpl->cameras)
     {
-        if (!camera->isOffline())
+        if (camera->isOffline())
         {
-            throw std::invalid_argument("Offline playback pause requires all cameras to use file sources");
+            camera->setPaused(paused);
         }
-    }
-    for (auto const& camera : mImpl->cameras)
-    {
-        camera->setPaused(paused);
     }
     if (paused)
     {
         for (auto const& camera : mImpl->cameras)
         {
-            camera->waitUntilPaused();
+            if (camera->isOffline())
+            {
+                camera->waitUntilPaused();
+            }
         }
     }
 }

@@ -120,6 +120,7 @@ private:
     int32_t mNumHeads{0};           //!< Number of key-value heads
     int32_t mHeadDim{0};            //!< Head dimension
     int32_t mNumDiffusionTokens{0}; //!< Number of diffusion tokens (waypoints)
+    bool mIsTreeActionGraph{false}; //!< Unrolled Alpamayo2-Edge action graph
 
     //! Parse the model configuration from config.json
     //! @return true if parsing was successful, false otherwise
@@ -140,6 +141,10 @@ private:
 
     //! Profile the shared LLM pool and private action scratch for TP=1.
     bool setupPagedActionOptimizationProfile(
+        nvinfer1::IBuilder& builder, nvinfer1::IBuilderConfig& config, nvinfer1::INetworkDefinition const& network);
+
+    //! Profile the unrolled Alpamayo2-Edge tree-attention graph.
+    bool setupTreeActionOptimizationProfile(
         nvinfer1::IBuilder& builder, nvinfer1::IBuilderConfig& config, nvinfer1::INetworkDefinition const& network);
 
     //! Copy and save the model configuration with builder config.

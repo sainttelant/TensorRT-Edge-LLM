@@ -78,7 +78,10 @@ public:
     std::vector<Frame> snapshot(
         std::chrono::milliseconds maxAge, std::chrono::milliseconds maxSkew) const override;
 
-    //! Pause or resume playback only when every source is an offline video file.
+    //! Return whether the rig contains an offline video source.
+    bool hasOfflineSources() const;
+
+    //! Pause or resume offline video sources without interrupting live cameras.
     void setOfflinePlaybackPaused(bool paused);
 
 private:

@@ -145,6 +145,64 @@ TEST(CameraRigTest, PausesAndResumesOfflineVideo)
     EXPECT_TRUE(ended);
 }
 
+//! Pausing a mixed rig stops offline playback while the live source continues.
+TEST(CameraRigTest, PausesOnlyOfflineSources)
+{
+    std::string const pipeline
+        = "videotestsrc is-live=true ! video/x-raw,width=32,height=32,framerate=10/1 ! videoconvert ! appsink";
+    cv::VideoCapture probe(pipeline, cv::CAP_GSTREAMER);
+    if (!probe.isOpened())
+    {
+        GTEST_SKIP() << "GStreamer videotestsrc is unavailable";
+    }
+    probe.release();
+
+    char directory[] = "/tmp/alpaway-mixed-camera-test-XXXXXX";
+    ASSERT_NE(mkdtemp(directory), nullptr);
+    TemporaryCameraFiles files{
+        directory, std::string(directory) + "/video.avi", std::string(directory) + "/config.json"};
+    cv::VideoWriter writer(files.video, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 10.0, cv::Size(32, 32));
+    ASSERT_TRUE(writer.isOpened());
+    for (int i = 0; i < 50; ++i)
+    {
+        writer.write(cv::Mat(32, 32, CV_8UC3, cv::Scalar(i, i, i)));
+    }
+    writer.release();
+    {
+        auto config = cameraConfig("file", files.video);
+        config["stream_cameras"][1]["type"] = "gstreamer";
+        config["stream_cameras"][1]["source"] = pipeline;
+        std::ofstream output(files.config);
+        output << config;
+    }
+    cameras::CameraRig rig(files.config);
+    auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    std::vector<cameras::Frame> frames;
+    while (frames.empty() && std::chrono::steady_clock::now() < deadline)
+    {
+        frames = rig.snapshot(std::chrono::seconds(2), std::chrono::seconds(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(frames.size(), size_t{4});
+    rig.setOfflinePlaybackPaused(true);
+    auto const paused = rig.snapshot(std::chrono::seconds(2), std::chrono::seconds(2));
+    ASSERT_EQ(paused.size(), size_t{4});
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    auto const during = rig.snapshot(std::chrono::seconds(2), std::chrono::seconds(2));
+    ASSERT_EQ(during.size(), size_t{4});
+    EXPECT_EQ(during[0].sequence, paused[0].sequence);
+    EXPECT_GT(during[1].sequence, paused[1].sequence);
+    EXPECT_EQ(during[2].sequence, paused[2].sequence);
+    EXPECT_EQ(during[3].sequence, paused[3].sequence);
+    rig.setOfflinePlaybackPaused(false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    auto const resumed = rig.snapshot(std::chrono::seconds(2), std::chrono::seconds(2));
+    ASSERT_EQ(resumed.size(), size_t{4});
+    EXPECT_GT(resumed[0].sequence, during[0].sequence);
+    EXPECT_GT(resumed[2].sequence, during[2].sequence);
+    EXPECT_GT(resumed[3].sequence, during[3].sequence);
+}
+
 TEST(FrameBufferTest, CopiesFramesAndRejectsStaleOrSkewedSets)
 {
     cameras::FrameBuffer source;

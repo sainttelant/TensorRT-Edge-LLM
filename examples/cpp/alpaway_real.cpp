@@ -53,7 +53,6 @@ struct Args
     std::string calibrationFile;
     int maxWindows{0};
     bool show{false};
-    bool pauseOfflineDuringInference{false};
     std::optional<Alpaway::TrajectoryPreview> preview;
 };
 
@@ -63,7 +62,7 @@ void usage(char const* name)
               << " --camera-config PATH --trajectory-file PATH --engine-dir PATH --multimodal-engine-dir PATH"
                  " [--checkpoint-dir PATH] [--max-windows N] [--show]"
                  " [--preview-speed-mps VALUE --preview-dt SECONDS] [--preview-calibration PATH]"
-                 " [--pause-offline-during-inference]\n";
+                 "\nOffline video sources pause during inference; with --show, press a key to resume.\n";
 }
 
 double parseNumber(char const* input)
@@ -113,7 +112,10 @@ Args parseArgs(int argc, char** argv)
             break;
         }
         case 's': args.show = true; break;
-        case 'P': args.pauseOfflineDuringInference = true; break;
+        case 'P':
+            std::cerr << "Warning: --pause-offline-during-inference is deprecated; "
+                         "offline sources pause automatically.\n";
+            break;
         case 'v': previewSpeed = parseNumber(optarg); break;
         case 'd': previewDt = parseNumber(optarg); break;
         case 'C':
@@ -273,6 +275,7 @@ int main(int argc, char** argv)
             std::cerr << "Warning: CUDA graph capture failed; using normal execution\n";
         }
         cameras::CameraRig rig(args.cameraConfig);
+        bool const hasOfflineSources = rig.hasOfflineSources();
         cameras::FrameSource& frameSource = rig;
         std::deque<std::vector<cameras::Frame>> history;
         auto nextSample = std::chrono::steady_clock::now();
@@ -352,10 +355,7 @@ int main(int argc, char** argv)
             {
                 continue;
             }
-            if (args.pauseOfflineDuringInference)
-            {
-                rig.setOfflinePlaybackPaused(true);
-            }
+            rig.setOfflinePlaybackPaused(true);
             vehicle::TrajectoryHistory trajectory;
             trajectory.loadJson(args.trajectoryFile);
             auto const wallNow = std::chrono::system_clock::now();
@@ -431,21 +431,18 @@ int main(int argc, char** argv)
                     renderer.drawText(display, {35, 92}, "Result ready - press any key to exit", Alpaway::YELLOW,
                         Alpaway::FONT_HERSHEY_SIMPLEX, 0.75, 2);
                 }
-                else if (args.pauseOfflineDuringInference)
+                else if (hasOfflineSources)
                 {
-                    renderer.drawText(display, {35, 92}, "Press any key for next result; ESC to exit", Alpaway::YELLOW,
-                        Alpaway::FONT_HERSHEY_SIMPLEX, 0.75, 2);
+                    renderer.drawText(display, {35, 92}, "Video paused - press any key to continue; ESC to exit",
+                        Alpaway::YELLOW, Alpaway::FONT_HERSHEY_SIMPLEX, 0.75, 2);
                 }
                 cv::imshow(windowName, display);
-                if (cv::waitKey(finalWindow || args.pauseOfflineDuringInference ? 0 : 1) == 27)
+                if (cv::waitKey(finalWindow || hasOfflineSources ? 0 : 1) == 27)
                 {
                     break;
                 }
             }
-            if (args.pauseOfflineDuringInference)
-            {
-                rig.setOfflinePlaybackPaused(false);
-            }
+            rig.setOfflinePlaybackPaused(false);
             history.clear();
             nextSample = std::chrono::steady_clock::now();
             lastValid = nextSample;

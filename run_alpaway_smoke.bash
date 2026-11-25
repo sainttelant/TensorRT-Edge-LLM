@@ -165,7 +165,6 @@ done
     --engine-dir "$LLM_ENGINE_DIR" \
     --multimodal-engine-dir "$MULTIMODAL_ENGINE_DIR" \
     --max-windows "$MAX_WINDOWS" \
-    --pause-offline-during-inference \
     "${SHOW_ARGS[@]}" "${PREVIEW_ARGS[@]}" &
 INFERENCE_PID=$!
 while kill -0 "$INFERENCE_PID" 2>/dev/null; do

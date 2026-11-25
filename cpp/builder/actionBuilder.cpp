@@ -18,6 +18,7 @@
 #include "actionBuilder.h"
 #include "builderUtils.h"
 #include "common/bindingNames.h"
+#include "common/cudaUtils.h"
 #include "common/executionPhase.h"
 #include "common/logger.h"
 #include "common/pagedKvTypes.h"
@@ -66,7 +67,7 @@ bool ActionBuilder::build()
 
     LOG_DEBUG("%s", printNetworkInfo(network.get(), "Action").c_str());
 
-    auto config = createBuilderConfig(builder.get());
+    auto config = createBuilderConfig(builder.get(), mIsTreeActionGraph);
     if (!config)
     {
         return false;
@@ -138,12 +139,22 @@ bool ActionBuilder::parseConfig()
     }
     mHeadDim = mModelConfig["head_dim"].get<int32_t>();
 
-    if (!mModelConfig.contains("n_diffusion_tokens"))
+    mIsTreeActionGraph = mModelConfig.value("graph", "") == "host/action_graph.py"
+        && mModelConfig.value("attention", "") == "tree_plugin";
+    char const* tokenKey = mIsTreeActionGraph ? "tokens" : "n_diffusion_tokens";
+    if (!mModelConfig.contains(tokenKey))
     {
-        LOG_ERROR("n_diffusion_tokens not found in config.json");
+        LOG_ERROR("%s not found in config.json", tokenKey);
         return false;
     }
-    mNumDiffusionTokens = mModelConfig["n_diffusion_tokens"].get<int32_t>();
+    mNumDiffusionTokens = mModelConfig[tokenKey].get<int32_t>();
+
+    if (mIsTreeActionGraph && getSMVersion() < 89
+        && (mModelConfig.value("kv_cache", "") != "fp16" || mModelConfig.value("gemm", "") != "fp16"))
+    {
+        LOG_ERROR("Alpamayo2-Edge on this GPU requires FP16 KV cache and GEMMs.");
+        return false;
+    }
 
     if (mModelConfig.contains("builder_config"))
     {
@@ -179,11 +190,66 @@ int32_t findInputDim(nvinfer1::INetworkDefinition const& network, std::string co
 bool ActionBuilder::setupActionOptimizationProfile(
     nvinfer1::IBuilder& builder, nvinfer1::IBuilderConfig& config, nvinfer1::INetworkDefinition const& network)
 {
+    if (mIsTreeActionGraph)
+    {
+        return setupTreeActionOptimizationProfile(builder, config, network);
+    }
     if (findInputDim(network, binding_names::formatKCacheName(0, true), 2) > 0)
     {
         return setupDenseActionOptimizationProfile(builder, config, network);
     }
     return setupPagedActionOptimizationProfile(builder, config, network);
+}
+
+bool ActionBuilder::setupTreeActionOptimizationProfile(
+    nvinfer1::IBuilder& builder, nvinfer1::IBuilderConfig& config, nvinfer1::INetworkDefinition const& network)
+{
+    int32_t const candidates = mModelConfig.value("candidates", 0);
+    int32_t perSequence = mModelConfig.value("candidates_per_sequence", 0);
+    if (candidates <= 0 || perSequence <= 0 || mNumLayers <= 0 || mNumHeads <= 0 || mHeadDim <= 0
+        || mNumDiffusionTokens <= 0)
+    {
+        LOG_ERROR("Invalid Alpamayo2-Edge action graph dimensions in config.json.");
+        return false;
+    }
+    while (candidates % perSequence != 0)
+    {
+        --perSequence;
+    }
+    int32_t const sequences = candidates / perSequence;
+    if (findInputDim(network, binding_names::kKVPageTable, 0) != sequences
+        || findInputDim(network, "pool_0", 1) != -1)
+    {
+        LOG_ERROR("Alpamayo2-Edge action graph inputs do not match config.json.");
+        return false;
+    }
+
+    auto* profile = builder.createOptimizationProfile();
+    if (profile == nullptr)
+    {
+        LOG_ERROR("Failed to create Alpamayo2-Edge action optimization profile.");
+        return false;
+    }
+    bool result = true;
+    for (int32_t i = 0; i < mNumLayers; ++i)
+    {
+        std::string const name = "pool_" + std::to_string(i);
+        result &= setOptimizationProfile(profile, name.c_str(), createDims({2, 28, 128, mNumHeads, mHeadDim}),
+            createDims({2, 448, 128, mNumHeads, mHeadDim}), createDims({2, 512, 128, mNumHeads, mHeadDim}));
+    }
+    result &= setOptimizationProfile(profile, binding_names::kKVPageTable, createDims({sequences, 2, 1}),
+        createDims({sequences, 2, 32}), createDims({sequences, 2, 64}));
+    int32_t const phase = static_cast<int32_t>(rt::ExecutionPhase::kSpecTargetVerify);
+    result &= setOptimizationProfile(profile, binding_names::kExecutionPhaseMarker, createDims({phase}),
+        createDims({phase}), createDims({phase}));
+    result &= setOptimizationProfile(
+        profile, binding_names::kContextSequenceCountCarrier, createDims({0}), createDims({0}), createDims({0}));
+    if (!result || config.addOptimizationProfile(profile) < 0)
+    {
+        LOG_ERROR("Failed to configure Alpamayo2-Edge action optimization profile.");
+        return false;
+    }
+    return true;
 }
 
 bool ActionBuilder::setupDenseActionOptimizationProfile(
