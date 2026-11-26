@@ -252,10 +252,7 @@ bool parseLLMInferenceArgs(LLMInferenceArgs& args, int argc, char* argv[])
         {"cp-spec-verify-size", required_argument, 0, LLMInferenceOptionId::CP_SPEC_VERIFY_SIZE},
         {"cpSpecVerifySize", required_argument, 0, LLMInferenceOptionId::CP_SPEC_VERIFY_SIZE},
         // deprecated alias
-        // deprecated alias
-        // deprecated alias
-
-        // deprecated alias
+        
 
         {"batch-size", required_argument, 0, LLMInferenceOptionId::BATCH_SIZE},
         {"batchSize", required_argument, 0, LLMInferenceOptionId::BATCH_SIZE},
